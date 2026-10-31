@@ -74,3 +74,13 @@ bash open-fargate.sh execute-app cms-test cms-test-create --reviewed
 ```
 
 Use UPDATE for an existing application stack. The private parameters file is a standard CloudFormation parameter array. Omit Cluster, ListenerArn, LoadBalancerSecurityGroup and VpcId: the command resolves those from the backing stack and rejects overrides. Preparing a change set does not execute it. Do not pass raw credentials in parameters; use the tenant secret ARN. These commands operate only in the configured AWS profile/account and do not change Cloud catalog or billing records.
+
+## Kubernetes-compatible release flow
+
+This repository follows `techcto/aws-kubernetes`: a `vMAJOR.MINOR.PATCH` GitHub tag publishes versioned CloudFormation templates to S3; Cloud's connected Git provider imports `cloud.yaml`. GitHub Actions does not write catalog records or deploy application infrastructure.
+
+Use the same existing publisher-account configuration as Kubernetes: repository/organization variable `MP_AWS_ACCESS_KEY_ID`, secured secret `MP_AWS_SECRET_ACCESS_KEY`, and optional `AWS_REGION`. These are variable names only; no keys are stored in this repository. The existing S3 publisher needs write access to `s3://kubernetes-ui/cloudformation/fargate/*`. If organizational secrets/variables are repository-restricted, grant this repository access to the existing configuration. GitHub does not automatically inherit another repository's private secrets.
+
+The default release bucket is the existing `kubernetes-ui` bucket with a separate `cloudformation/fargate/VERSION` prefix. No bucket, policy, or IAM role is created by this workflow. Overriding the bucket requires updating `cloud.yaml` to the matching real artifact URL before tagging. Artifact accessibility must match the Kubernetes templates so CloudFormation can read them.
+
+In Cloud, bind the Fargate App Hub Cluster item to the same SpaceMade Git provider used by Kubernetes, with repository `techcto/fargate`. Select SpaceMade's existing AWS provider at launch. Seller release publication and customer infrastructure deployment remain separate account roles. Draft imports remain draft until the Fargate runtime/tenant capacity gates are complete.

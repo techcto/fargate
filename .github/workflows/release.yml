@@ -1,0 +1,36 @@
+name: Release Fargate App Hub
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      release_version:
+        description: Release version without the leading v
+        required: true
+
+concurrency:
+  group: fargate-app-hub-release
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  AWS_REGION: ${{ vars.AWS_REGION || 'us-east-1' }}
+  FARGATE_RELEASE_BUCKET: ${{ vars.FARGATE_RELEASE_BUCKET || vars.KUBERNETES_RELEASE_BUCKET || 'kubernetes-ui' }}
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-region: ${{ env.AWS_REGION }}
+          aws-access-key-id: ${{ vars.MP_AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.MP_AWS_SECRET_ACCESS_KEY }}
+      - name: Publish versioned Fargate deployment artifacts
+        env:
+          INPUT_VERSION: ${{ inputs.release_version }}
+        run: bash bin/publish-release.sh "${INPUT_VERSION:-${GITHUB_REF_NAME#v}}"
