@@ -31,6 +31,39 @@ if (['status', 'outputs', 'attachment'].includes(command)) {
   if (!['CREATE', 'UPDATE'].includes(type) || !name || !file) throw new Error('Usage: bash open-fargate.sh plan CREATE|UPDATE change-set-name private.parameters.json');
   print(aws(['cloudformation', 'create-change-set', '--stack-name', stack, '--change-set-name', name,
     '--change-set-type', type, '--template-body', 'file://' + template, '--parameters', 'file://' + resolve(file)]));
+} else if (command === 'plan-app') {
+  const [type, appStack, name, templateFile, file] = process.argv.slice(3);
+  if (!['CREATE', 'UPDATE'].includes(type) || !appStack || !name || !templateFile || !file) {
+    throw new Error('Usage: bash open-fargate.sh plan-app CREATE|UPDATE app-stack change-set template private.parameters.json');
+  }
+  if (appStack === stack) throw new Error('An application must not replace the backing platform stack.');
+  const deployed = aws(['cloudformation', 'describe-stacks', '--stack-name', stack]).Stacks[0];
+  if (!['CREATE_COMPLETE', 'UPDATE_COMPLETE', 'UPDATE_ROLLBACK_COMPLETE'].includes(deployed.StackStatus)) {
+    throw new Error('The backing platform must be stable before preparing an application change set.');
+  }
+  const outputs = Object.fromEntries((deployed.Outputs ?? []).map(v => [v.OutputKey, v.OutputValue]));
+  attachmentFromOutputs(outputs);
+  const supplied = JSON.parse(readFileSync(file, 'utf8'));
+  if (!Array.isArray(supplied)) throw new Error('Use an AWS CloudFormation parameters array.');
+  const bound = ['Cluster', 'ListenerArn', 'LoadBalancerSecurityGroup', 'VpcId'];
+  const seen = new Set();
+  for (const parameter of supplied) {
+    if (!parameter || typeof parameter.ParameterKey !== 'string' || seen.has(parameter.ParameterKey)) {
+      throw new Error('Parameters must have unique ParameterKey values.');
+    }
+    seen.add(parameter.ParameterKey);
+    if (bound.includes(parameter.ParameterKey)) throw new Error('Backing platform parameters are resolved from its stack, not application input.');
+  }
+  const parameters = [...supplied, ...bound.map(key => ({ ParameterKey: key, ParameterValue: outputs[key] }))];
+  print(aws(['cloudformation', 'create-change-set', '--stack-name', appStack, '--change-set-name', name,
+    '--change-set-type', type, '--template-body', 'file://' + resolve(templateFile),
+    '--parameters', JSON.stringify(parameters), '--capabilities', 'CAPABILITY_IAM']));
+} else if (command === 'review-app' || command === 'execute-app') {
+  const [appStack, name, confirmation] = process.argv.slice(3);
+  if (!appStack || appStack === stack || !name) throw new Error('Use the application stack name and change-set name.');
+  if (command === 'execute-app' && confirmation !== '--reviewed') throw new Error('Review the application change set before using --reviewed.');
+  print(aws(['cloudformation', command === 'review-app' ? 'describe-change-set' : 'execute-change-set',
+    '--stack-name', appStack, '--change-set-name', name]));
 } else if (command === 'review' || command === 'execute') {
   const name = process.argv[3];
   if (!name) throw new Error('A reviewed change-set name is required.');

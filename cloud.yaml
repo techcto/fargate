@@ -1,0 +1,9 @@
+# Tag releases as vMAJOR.MINOR.PATCH. Cloud imports metadata through GitFlow.
+# Remain draft until Cluster attachment, capacity and lifecycle tests are complete.
+catalog-item:
+  name: fargate-app-hub
+version:
+  description: 'Fargate App Hub shared ECS infrastructure'
+  resource_url: 'https://raw.githubusercontent.com/techcto/fargate/v${Git.Version}/devops/cloudformation/apphub.yaml'
+  resource_params: |
+    engine: fargate
