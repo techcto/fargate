@@ -1,0 +1,38 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Import only reviewed, unused legacy networking before CloudFormation-managed cleanup. Never import application storage or active AppHub resources.
+Parameters:
+  VpcId:
+    Type: AWS::EC2::VPC::Id
+Resources:
+  LegacyOpenAdaApiTargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    DeletionPolicy: Retain
+    Properties:
+      Name: openada-api
+      Port: 3001
+      Protocol: HTTP
+      TargetType: ip
+      VpcId: !Ref VpcId
+      HealthCheckPath: /api/health
+  LegacyOpenAdaWebTargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    DeletionPolicy: Retain
+    Properties:
+      Name: openada-ui
+      Port: 3000
+      Protocol: HTTP
+      TargetType: ip
+      VpcId: !Ref VpcId
+      HealthCheckPath: /
+  LegacyOpenAdaAlbSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    DeletionPolicy: Retain
+    Properties:
+      GroupDescription: Public access to the OpenADA load balancer.
+      VpcId: !Ref VpcId
+  LegacyGuardScaleAlbSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    DeletionPolicy: Retain
+    Properties:
+      GroupDescription: GuardScale public ingress
+      VpcId: !Ref VpcId

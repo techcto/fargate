@@ -1,0 +1,61 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Scheduled AppHub application data backups. Install and remove only through CloudFormation.
+Parameters:
+  ResourceArns:
+    Type: CommaDelimitedList
+    Description: Reviewed DynamoDB table and S3 bucket ARNs owned by application stacks; exclude cache and networking.
+  RetentionDays:
+    Type: Number
+    Default: 30
+    MinValue: 1
+    MaxValue: 3650
+  ScheduleExpression:
+    Type: String
+    Default: cron(0 5 * * ? *)
+    Description: AWS Backup schedule in UTC.
+Resources:
+  BackupVault:
+    Type: AWS::Backup::BackupVault
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      BackupVaultName: !Sub '${AWS::StackName}-data'
+  BackupRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: backup.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - !Sub 'arn:${AWS::Partition}:iam::aws:policy/service-role/AWSBackupServiceRolePolicyForBackup'
+        - !Sub 'arn:${AWS::Partition}:iam::aws:policy/AWSBackupServiceRolePolicyForS3Backup'
+  BackupPlan:
+    Type: AWS::Backup::BackupPlan
+    Properties:
+      BackupPlan:
+        BackupPlanName: !Sub '${AWS::StackName}-daily'
+        BackupPlanRule:
+          - RuleName: daily-application-data
+            TargetBackupVault: !Ref BackupVault
+            ScheduleExpression: !Ref ScheduleExpression
+            StartWindowMinutes: 60
+            CompletionWindowMinutes: 360
+            Lifecycle:
+              DeleteAfterDays: !Ref RetentionDays
+  BackupSelection:
+    Type: AWS::Backup::BackupSelection
+    Properties:
+      BackupPlanId: !Ref BackupPlan
+      BackupSelection:
+        SelectionName: application-storage
+        IamRoleArn: !GetAtt BackupRole.Arn
+        Resources: !Ref ResourceArns
+Outputs:
+  VaultName:
+    Value: !Ref BackupVault
+  PlanId:
+    Value: !Ref BackupPlan

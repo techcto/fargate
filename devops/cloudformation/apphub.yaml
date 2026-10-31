@@ -1,0 +1,217 @@
+{
+  "AWSTemplateFormatVersion": "2010-09-09",
+  "Description": "Fargate App Hub shared hosting platform: ECS cluster and shared ALB; independent CloudFormation application stacks.",
+  "Parameters": {
+    "VpcId": {
+      "Type": "AWS::EC2::VPC::Id"
+    },
+    "PublicSubnets": {
+      "Type": "List<AWS::EC2::Subnet::Id>"
+    },
+    "CertificateArn": {
+      "Type": "String",
+      "Description": "Default issued ACM certificate for the HTTPS listener."
+    }
+  },
+  "Resources": {
+    "Cluster": {
+      "Type": "AWS::ECS::Cluster",
+      "Properties": {
+        "ClusterName": {
+          "Fn::Sub": "${AWS::StackName}"
+        },
+        "ClusterSettings": [
+          {
+            "Name": "containerInsights",
+            "Value": "enabled"
+          }
+        ],
+        "Tags": [
+          {
+            "Key": "Name",
+            "Value": "apphub-fargate-cluster"
+          },
+          {
+            "Key": "Platform",
+            "Value": "AppHub"
+          }
+        ],
+        "CapacityProviders": [
+          "FARGATE"
+        ]
+      }
+    },
+    "AlbSecurityGroup": {
+      "Type": "AWS::EC2::SecurityGroup",
+      "Properties": {
+        "GroupDescription": "Public HTTP redirect and HTTPS for shared applications",
+        "VpcId": {
+          "Ref": "VpcId"
+        },
+        "SecurityGroupIngress": [
+          {
+            "IpProtocol": "tcp",
+            "FromPort": 80,
+            "ToPort": 80,
+            "CidrIp": "0.0.0.0/0"
+          },
+          {
+            "IpProtocol": "tcp",
+            "FromPort": 443,
+            "ToPort": 443,
+            "CidrIp": "0.0.0.0/0"
+          }
+        ],
+        "Tags": [
+          {
+            "Key": "Name",
+            "Value": "apphub-alb-security-group"
+          },
+          {
+            "Key": "Platform",
+            "Value": "AppHub"
+          }
+        ]
+      }
+    },
+    "ALB": {
+      "Type": "AWS::ElasticLoadBalancingV2::LoadBalancer",
+      "Properties": {
+        "Scheme": "internet-facing",
+        "Type": "application",
+        "Subnets": {
+          "Ref": "PublicSubnets"
+        },
+        "SecurityGroups": [
+          {
+            "Ref": "AlbSecurityGroup"
+          }
+        ],
+        "LoadBalancerAttributes": [
+          {
+            "Key": "routing.http.drop_invalid_header_fields.enabled",
+            "Value": "true"
+          }
+        ],
+        "Tags": [
+          {
+            "Key": "Name",
+            "Value": "apphub-alb"
+          },
+          {
+            "Key": "Platform",
+            "Value": "AppHub"
+          }
+        ]
+      }
+    },
+    "HttpListener": {
+      "Type": "AWS::ElasticLoadBalancingV2::Listener",
+      "Properties": {
+        "LoadBalancerArn": {
+          "Ref": "ALB"
+        },
+        "Port": 80,
+        "Protocol": "HTTP",
+        "DefaultActions": [
+          {
+            "Type": "redirect",
+            "RedirectConfig": {
+              "Protocol": "HTTPS",
+              "Port": "443",
+              "StatusCode": "HTTP_301"
+            }
+          }
+        ]
+      }
+    },
+    "HttpsListener": {
+      "Type": "AWS::ElasticLoadBalancingV2::Listener",
+      "Properties": {
+        "LoadBalancerArn": {
+          "Ref": "ALB"
+        },
+        "Port": 443,
+        "Protocol": "HTTPS",
+        "SslPolicy": "ELBSecurityPolicy-TLS13-1-2-2021-06",
+        "Certificates": [
+          {
+            "CertificateArn": {
+              "Ref": "CertificateArn"
+            }
+          }
+        ],
+        "DefaultActions": [
+          {
+            "Type": "fixed-response",
+            "FixedResponseConfig": {
+              "StatusCode": "404",
+              "ContentType": "text/plain",
+              "MessageBody": "Application hostname not configured"
+            }
+          }
+        ]
+      }
+    }
+  },
+  "Outputs": {
+    "Cluster": {
+      "Value": {
+        "Ref": "Cluster"
+      }
+    },
+    "ListenerArn": {
+      "Value": {
+        "Ref": "HttpsListener"
+      }
+    },
+    "LoadBalancerArn": {
+      "Value": {
+        "Ref": "ALB"
+      }
+    },
+    "LoadBalancerSecurityGroup": {
+      "Value": {
+        "Ref": "AlbSecurityGroup"
+      }
+    },
+    "LoadBalancerDnsName": {
+      "Value": {
+        "Fn::GetAtt": [
+          "ALB",
+          "DNSName"
+        ]
+      }
+    },
+    "LoadBalancerCanonicalHostedZoneId": {
+      "Value": {
+        "Fn::GetAtt": [
+          "ALB",
+          "CanonicalHostedZoneID"
+        ]
+      }
+    },
+    "ClusterArn": {
+      "Value": {
+        "Fn::GetAtt": [
+          "Cluster",
+          "Arn"
+        ]
+      }
+    },
+    "VpcId": {
+      "Value": {
+        "Ref": "VpcId"
+      }
+    },
+    "Engine": {
+      "Value": "fargate"
+    },
+    "Platform": {
+      "Value": "Fargate App Hub"
+    },
+    "AttachmentContractVersion": {
+      "Value": "1"
+    }
+  }
+}

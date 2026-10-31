@@ -1,0 +1,56 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "AppEventBusLifecycle",
+      "Effect": "Allow",
+      "Action": [
+        "events:CreateEventBus",
+        "events:DescribeEventBus",
+        "events:DeleteEventBus",
+        "events:TagResource",
+        "events:UntagResource",
+        "events:ListTagsForResource"
+      ],
+      "Resource": [
+        "arn:aws:events:us-east-1:*:event-bus/autovision-*",
+        "arn:aws:events:us-east-1:*:event-bus/smartdetector-*"
+      ]
+    },
+    {
+      "Sid": "AppEventRules",
+      "Effect": "Allow",
+      "Action": [
+        "events:PutRule",
+        "events:DescribeRule",
+        "events:DeleteRule",
+        "events:PutTargets",
+        "events:RemoveTargets",
+        "events:ListTargetsByRule",
+        "events:TagResource",
+        "events:UntagResource",
+        "events:ListTagsForResource"
+      ],
+      "Resource": [
+        "arn:aws:events:us-east-1:*:rule/autovision-*/*",
+        "arn:aws:events:us-east-1:*:rule/smartdetector-*/*"
+      ]
+    },
+    {
+      "Sid": "ApplicationDns",
+      "Effect": "Allow",
+      "Action": [
+        "route53:GetHostedZone",
+        "route53:ListResourceRecordSets",
+        "route53:ChangeResourceRecordSets"
+      ],
+      "Resource": "arn:aws:route53:::hostedzone/*"
+    },
+    {
+      "Sid": "DnsChangeStatus",
+      "Effect": "Allow",
+      "Action": "route53:GetChange",
+      "Resource": "arn:aws:route53:::change/*"
+    }
+  ]
+}

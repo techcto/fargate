@@ -1,0 +1,38 @@
+{
+  "platform": "Fargate App Hub",
+  "compute": "Amazon ECS on AWS Fargate",
+  "apps": [
+    {
+      "id": "openada",
+      "domain": "openada.us",
+      "mode": "standalone-or-apphub",
+      "apiPriority": 500,
+      "webPriority": 501
+    },
+    {
+      "id": "guardscale",
+      "domain": "guardscale.org",
+      "mode": "standalone-or-apphub",
+      "apiPriority": 600,
+      "webPriority": 601
+    },
+    {
+      "id": "autovision",
+      "domain": "autovision.dev",
+      "mode": "standalone-or-apphub",
+      "apiPriority": 300,
+      "webPriority": 301
+    },
+    {
+      "id": "smartdetector",
+      "domain": "smartdetector.com",
+      "mode": "standalone-or-apphub",
+      "apiPriority": 400,
+      "webPriority": 401
+    }
+  ],
+  "excluded": [
+    "osirus"
+  ],
+  "pending": "Fifth application not yet identified"
+}

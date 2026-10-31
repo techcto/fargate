@@ -1,0 +1,41 @@
+{
+  "version": 1,
+  "name": "Fargate App Hub",
+  "engine": "fargate",
+  "lifecycle": "cloudformation-change-set",
+  "requiredPlatformOutputs": [
+    "Cluster",
+    "ClusterArn",
+    "ListenerArn",
+    "LoadBalancerSecurityGroup",
+    "VpcId"
+  ],
+  "applicationParameters": {
+    "Cluster": "Cluster",
+    "ListenerArn": "ListenerArn",
+    "LoadBalancerSecurityGroup": "LoadBalancerSecurityGroup",
+    "VpcId": "VpcId"
+  },
+  "customerInputs": [
+    "privateServiceSubnets",
+    "hostname",
+    "certificateArn"
+  ],
+  "ownership": {
+    "platform": [
+      "cluster",
+      "loadBalancer",
+      "listeners"
+    ],
+    "application": [
+      "services",
+      "taskRoles",
+      "securityGroups",
+      "targetGroups",
+      "listenerRules",
+      "storage"
+    ],
+    "database": "Separate application database and credentials; existing database service attachment requires an explicit application contract."
+  },
+  "cloudIntegrationStatus": "adapter-required"
+}
