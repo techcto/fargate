@@ -84,3 +84,9 @@ Use the same existing publisher-account configuration as Kubernetes: repository/
 The default release bucket is the `fargate-aws` bucket with a separate `cloudformation/fargate/VERSION` prefix. No bucket, policy, or IAM role is created by this workflow. Overriding the bucket requires updating `cloud.yaml` to the matching real artifact URL before tagging. Artifact accessibility must match the Kubernetes templates so CloudFormation can read them.
 
 In Cloud, bind the Fargate App Hub Cluster item to the same SpaceMade Git provider used by Kubernetes, with repository `techcto/fargate`. Select SpaceMade's existing AWS provider at launch. Seller release publication and customer infrastructure deployment remain separate account roles. Draft imports remain draft until the Fargate runtime/tenant capacity gates are complete.
+
+## SpaceMade GitFlow connection
+
+SpaceMade's `fargate-app-hub` Cluster catalog item links to `techcto/fargate` through the same connected GitHub provider as `techcto/aws-kubernetes`. The GitHub repository owner is `techcto`; the selling Cloud organization is SpaceMade. Branch pushes exercise webhook delivery without creating catalog versions. Semantic release tags import draft versions through GitFlow after release artifacts are available.
+
+Private management terms: SpaceMade charges $5 per provisioned vCPU-month, prorated by running time. The cluster owner pays AWS infrastructure directly and sets its own application resale prices. These commercial terms are approved; paid activation remains gated on verified metering and lifecycle tests.
