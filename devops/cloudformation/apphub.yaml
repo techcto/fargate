@@ -327,8 +327,8 @@
           "Ref": "PrivateSubnets"
         }
       },
-      "DeletionPolicy": "Retain",
-      "UpdateReplacePolicy": "Retain"
+      "DeletionPolicy": "Delete",
+      "UpdateReplacePolicy": "Delete"
     },
     "DatabaseSecurityGroup": {
       "Type": "AWS::EC2::SecurityGroup",
@@ -339,14 +339,14 @@
         },
         "GroupDescription": "App-owned ingress rules grant access to the shared database"
       },
-      "DeletionPolicy": "Retain",
-      "UpdateReplacePolicy": "Retain"
+      "DeletionPolicy": "Delete",
+      "UpdateReplacePolicy": "Delete"
     },
     "Database": {
       "Type": "AWS::RDS::DBCluster",
       "Condition": "CreateDatabase",
-      "DeletionPolicy": "Retain",
-      "UpdateReplacePolicy": "Retain",
+      "DeletionPolicy": "Delete",
+      "UpdateReplacePolicy": "Delete",
       "Properties": {
         "Engine": "aurora-mysql",
         "EngineMode": "provisioned",
@@ -355,7 +355,7 @@
         "EnableHttpEndpoint": true,
         "StorageEncrypted": true,
         "BackupRetentionPeriod": 7,
-        "DeletionProtection": true,
+        "DeletionProtection": false,
         "DBSubnetGroupName": {
           "Ref": "DatabaseSubnetGroup"
         },
@@ -385,8 +385,8 @@
         "DBInstanceClass": "db.serverless",
         "PubliclyAccessible": false
       },
-      "DeletionPolicy": "Retain",
-      "UpdateReplacePolicy": "Retain"
+      "DeletionPolicy": "Delete",
+      "UpdateReplacePolicy": "Delete"
     },
     "TenantDatabaseRole": {
       "Type": "AWS::IAM::Role",
@@ -483,8 +483,8 @@
     "TenantDatabaseLogs": {
       "Type": "AWS::Logs::LogGroup",
       "Condition": "HasDatabase",
-      "DeletionPolicy": "Retain",
-      "UpdateReplacePolicy": "Retain",
+      "DeletionPolicy": "Delete",
+      "UpdateReplacePolicy": "Delete",
       "Properties": {
         "LogGroupName": {
           "Fn::Sub": "/aws/lambda/${AWS::StackName}-tenant-database"
@@ -559,8 +559,8 @@
         "GroupDescription": "App-owned ingress permits access to shared DocumentDB"
       },
       "Condition": "CreateDocumentDb",
-      "DeletionPolicy": "Retain",
-      "UpdateReplacePolicy": "Retain"
+      "DeletionPolicy": "Delete",
+      "UpdateReplacePolicy": "Delete"
     },
     "DocumentDbSubnetGroup": {
       "Type": "AWS::DocDB::DBSubnetGroup",
@@ -571,14 +571,14 @@
           "Ref": "PrivateSubnets"
         }
       },
-      "DeletionPolicy": "Retain",
-      "UpdateReplacePolicy": "Retain"
+      "DeletionPolicy": "Delete",
+      "UpdateReplacePolicy": "Delete"
     },
     "DocumentDbAdminSecret": {
       "Type": "AWS::SecretsManager::Secret",
       "Condition": "CreateDocumentDb",
-      "DeletionPolicy": "Retain",
-      "UpdateReplacePolicy": "Retain",
+      "DeletionPolicy": "Delete",
+      "UpdateReplacePolicy": "Delete",
       "Properties": {
         "SecretString": {
           "Fn::Sub": "{\"username\":\"platformadmin\",\"password\":\"${DocumentDbAdminPassword}\"}"
@@ -588,8 +588,8 @@
     "DocumentDb": {
       "Type": "AWS::DocDB::DBCluster",
       "Condition": "CreateDocumentDb",
-      "DeletionPolicy": "Retain",
-      "UpdateReplacePolicy": "Retain",
+      "DeletionPolicy": "Delete",
+      "UpdateReplacePolicy": "Delete",
       "Properties": {
         "MasterUsername": "platformadmin",
         "MasterUserPassword": {
@@ -605,14 +605,14 @@
         ],
         "StorageEncrypted": true,
         "BackupRetentionPeriod": 7,
-        "DeletionProtection": true
+        "DeletionProtection": false
       }
     },
     "DocumentDbWriter": {
       "Type": "AWS::DocDB::DBInstance",
       "Condition": "CreateDocumentDb",
-      "DeletionPolicy": "Retain",
-      "UpdateReplacePolicy": "Retain",
+      "DeletionPolicy": "Delete",
+      "UpdateReplacePolicy": "Delete",
       "Properties": {
         "DBClusterIdentifier": {
           "Ref": "DocumentDb"
@@ -636,8 +636,8 @@
     "FileSystem": {
       "Type": "AWS::EFS::FileSystem",
       "Condition": "CreateFileSystem",
-      "DeletionPolicy": "Retain",
-      "UpdateReplacePolicy": "Retain",
+      "DeletionPolicy": "Delete",
+      "UpdateReplacePolicy": "Delete",
       "Properties": {
         "Encrypted": true,
         "FileSystemPolicy": {
@@ -715,8 +715,8 @@
         "GroupDescription": "App-owned ingress permits TLS cache connections"
       },
       "Condition": "CreateRedis",
-      "DeletionPolicy": "Retain",
-      "UpdateReplacePolicy": "Retain"
+      "DeletionPolicy": "Delete",
+      "UpdateReplacePolicy": "Delete"
     },
     "RedisUserGroup": {
       "Type": "AWS::ElastiCache::UserGroup",
@@ -745,14 +745,14 @@
         },
         "Engine": "valkey"
       },
-      "DeletionPolicy": "Retain",
-      "UpdateReplacePolicy": "Retain"
+      "DeletionPolicy": "Delete",
+      "UpdateReplacePolicy": "Delete"
     },
     "Redis": {
       "Type": "AWS::ElastiCache::ServerlessCache",
       "Condition": "CreateRedis",
-      "DeletionPolicy": "Retain",
-      "UpdateReplacePolicy": "Retain",
+      "DeletionPolicy": "Delete",
+      "UpdateReplacePolicy": "Delete",
       "Properties": {
         "ServerlessCacheName": {
           "Fn::Join": [
@@ -794,8 +794,8 @@
     "BackupVault": {
       "Type": "AWS::Backup::BackupVault",
       "Condition": "EnableDataBackups",
-      "DeletionPolicy": "Retain",
-      "UpdateReplacePolicy": "Retain",
+      "DeletionPolicy": "Delete",
+      "UpdateReplacePolicy": "Delete",
       "Properties": {
         "BackupVaultName": {
           "Fn::Join": [
@@ -962,8 +962,8 @@
     },
     "TaskEvents": {
       "Type": "AWS::Logs::LogGroup",
-      "DeletionPolicy": "Retain",
-      "UpdateReplacePolicy": "Retain",
+      "DeletionPolicy": "Delete",
+      "UpdateReplacePolicy": "Delete",
       "Properties": {
         "LogGroupName": {
           "Fn::Sub": "/spacemade/fargate/${AWS::StackName}/task-events"

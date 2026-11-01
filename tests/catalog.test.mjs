@@ -17,3 +17,17 @@ test('Valkey uses native default-user disabling without a dummy password secret'
   assert.match(template.Resources.DocumentDbAdminSecret.Properties.SecretString['Fn::Sub'],/\$\{DocumentDbAdminPassword\}/);
   assert.ok(template.Rules.DocumentDbPasswordRequired);
 });
+
+test('product deletion never silently detaches owned AWS resources',()=>{
+  const template=JSON.parse(readFileSync(new URL('../devops/cloudformation/apphub.yaml',import.meta.url),'utf8'));
+  for(const resource of Object.values(template.Resources)){
+    assert.notEqual(resource.DeletionPolicy,'Retain');
+    assert.notEqual(resource.UpdateReplacePolicy,'Retain');
+  }
+  for(const name of ['Database','DatabaseWriter','DocumentDb','DocumentDbWriter','FileSystem','Redis','BackupVault']){
+    assert.equal(template.Resources[name].DeletionPolicy,'Delete');
+    assert.equal(template.Resources[name].UpdateReplacePolicy,'Delete');
+  }
+  assert.equal(template.Resources.Database.Properties.DeletionProtection,false);
+  assert.equal(template.Resources.DocumentDb.Properties.DeletionProtection,false);
+});
