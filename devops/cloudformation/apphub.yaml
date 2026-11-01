@@ -582,6 +582,9 @@
       "Properties": {
         "SecretString": {
           "Fn::Sub": "{\"username\":\"platformadmin\",\"password\":\"${DocumentDbAdminPassword}\"}"
+        },
+        "Name": {
+          "Fn::Sub": "${AWS::StackName}-documentdb-admin"
         }
       }
     },

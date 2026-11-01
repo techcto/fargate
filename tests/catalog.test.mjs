@@ -14,6 +14,7 @@ test('Valkey uses native default-user disabling without a dummy password secret'
   assert.equal(template.Parameters.RedisMode.Default,'None');
   assert.equal(template.Parameters.DocumentDbAdminPassword.NoEcho,true);
   assert.equal(template.Resources.DocumentDbAdminSecret.Properties.GenerateSecretString,undefined);
+  assert.deepEqual(template.Resources.DocumentDbAdminSecret.Properties.Name,{'Fn::Sub':'${AWS::StackName}-documentdb-admin'});
   assert.match(template.Resources.DocumentDbAdminSecret.Properties.SecretString['Fn::Sub'],/\$\{DocumentDbAdminPassword\}/);
   assert.ok(template.Rules.DocumentDbPasswordRequired);
 });
