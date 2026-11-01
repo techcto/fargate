@@ -6,11 +6,75 @@
       "Type": "AWS::EC2::VPC::Id"
     },
     "PublicSubnets": {
-      "Type": "List<AWS::EC2::Subnet::Id>"
+      "Type": "CommaDelimitedList",
+      "Default": ""
     },
     "CertificateArn": {
       "Type": "String",
-      "Description": "Default issued ACM certificate for the HTTPS listener."
+      "Description": "Default issued ACM certificate for the HTTPS listener.",
+      "Default": ""
+    },
+    "LoadBalancerMode": {
+      "Type": "String",
+      "Default": "Create",
+      "AllowedValues": [
+        "Create",
+        "Existing",
+        "None"
+      ],
+      "Description": "Create a shared ALB, attach an existing HTTPS listener, or launch compute only."
+    },
+    "ExistingListenerArn": {
+      "Type": "String",
+      "Default": ""
+    },
+    "ExistingLoadBalancerSecurityGroup": {
+      "Type": "String",
+      "Default": ""
+    },
+    "DatabaseMode": {
+      "Type": "String",
+      "Default": "None",
+      "AllowedValues": [
+        "None",
+        "Create",
+        "Existing"
+      ],
+      "Description": "Optional shared Aurora MySQL with Data API. Application stacks allocate isolated databases and users."
+    },
+    "PrivateSubnets": {
+      "Type": "CommaDelimitedList",
+      "Default": "",
+      "Description": "At least two private subnets in different Availability Zones when creating shared Aurora."
+    },
+    "ExistingDatabaseClusterArn": {
+      "Type": "String",
+      "Default": ""
+    },
+    "ExistingDatabaseSecretArn": {
+      "Type": "String",
+      "Default": "",
+      "Description": "Administrator secret for an existing Aurora MySQL Data API cluster; never passed to application tasks."
+    },
+    "ExistingDatabaseEndpoint": {
+      "Type": "String",
+      "Default": ""
+    },
+    "ExistingDatabaseSecurityGroup": {
+      "Type": "String",
+      "Default": ""
+    },
+    "DatabaseMinCapacity": {
+      "Type": "Number",
+      "Default": 0.5,
+      "MinValue": 0.5,
+      "MaxValue": 128
+    },
+    "DatabaseMaxCapacity": {
+      "Type": "Number",
+      "Default": 2,
+      "MinValue": 0.5,
+      "MaxValue": 128
     }
   },
   "Resources": {
@@ -72,7 +136,8 @@
             "Value": "AppHub"
           }
         ]
-      }
+      },
+      "Condition": "CreateLoadBalancer"
     },
     "ALB": {
       "Type": "AWS::ElasticLoadBalancingV2::LoadBalancer",
@@ -103,7 +168,8 @@
             "Value": "AppHub"
           }
         ]
-      }
+      },
+      "Condition": "CreateLoadBalancer"
     },
     "HttpListener": {
       "Type": "AWS::ElasticLoadBalancingV2::Listener",
@@ -123,7 +189,8 @@
             }
           }
         ]
-      }
+      },
+      "Condition": "CreateLoadBalancer"
     },
     "HttpsListener": {
       "Type": "AWS::ElasticLoadBalancingV2::Listener",
@@ -151,6 +218,235 @@
             }
           }
         ]
+      },
+      "Condition": "CreateLoadBalancer"
+    },
+    "DatabaseSubnetGroup": {
+      "Type": "AWS::RDS::DBSubnetGroup",
+      "Condition": "CreateDatabase",
+      "Properties": {
+        "DBSubnetGroupDescription": "Private App Hub shared database subnets",
+        "SubnetIds": {
+          "Ref": "PrivateSubnets"
+        }
+      }
+    },
+    "DatabaseSecurityGroup": {
+      "Type": "AWS::EC2::SecurityGroup",
+      "Condition": "CreateDatabase",
+      "Properties": {
+        "VpcId": {
+          "Ref": "VpcId"
+        },
+        "GroupDescription": "App-owned ingress rules grant access to the shared database"
+      }
+    },
+    "Database": {
+      "Type": "AWS::RDS::DBCluster",
+      "Condition": "CreateDatabase",
+      "DeletionPolicy": "Retain",
+      "UpdateReplacePolicy": "Retain",
+      "Properties": {
+        "Engine": "aurora-mysql",
+        "EngineMode": "provisioned",
+        "MasterUsername": "platformadmin",
+        "ManageMasterUserPassword": true,
+        "EnableHttpEndpoint": true,
+        "StorageEncrypted": true,
+        "BackupRetentionPeriod": 7,
+        "DeletionProtection": true,
+        "DBSubnetGroupName": {
+          "Ref": "DatabaseSubnetGroup"
+        },
+        "VpcSecurityGroupIds": [
+          {
+            "Ref": "DatabaseSecurityGroup"
+          }
+        ],
+        "ServerlessV2ScalingConfiguration": {
+          "MinCapacity": {
+            "Ref": "DatabaseMinCapacity"
+          },
+          "MaxCapacity": {
+            "Ref": "DatabaseMaxCapacity"
+          }
+        }
+      }
+    },
+    "DatabaseWriter": {
+      "Type": "AWS::RDS::DBInstance",
+      "Condition": "CreateDatabase",
+      "Properties": {
+        "DBClusterIdentifier": {
+          "Ref": "Database"
+        },
+        "Engine": "aurora-mysql",
+        "DBInstanceClass": "db.serverless",
+        "PubliclyAccessible": false
+      },
+      "DeletionPolicy": "Retain",
+      "UpdateReplacePolicy": "Retain"
+    },
+    "TenantDatabaseRole": {
+      "Type": "AWS::IAM::Role",
+      "Condition": "HasDatabase",
+      "Properties": {
+        "AssumeRolePolicyDocument": {
+          "Version": "2012-10-17",
+          "Statement": [
+            {
+              "Effect": "Allow",
+              "Principal": {
+                "Service": "lambda.amazonaws.com"
+              },
+              "Action": "sts:AssumeRole"
+            }
+          ]
+        },
+        "Policies": [
+          {
+            "PolicyName": "AllocateOnlyPlatformTenantDatabases",
+            "PolicyDocument": {
+              "Version": "2012-10-17",
+              "Statement": [
+                {
+                  "Effect": "Allow",
+                  "Action": [
+                    "rds-data:ExecuteStatement"
+                  ],
+                  "Resource": {
+                    "Fn::If": [
+                      "CreateDatabase",
+                      {
+                        "Fn::GetAtt": [
+                          "Database",
+                          "DBClusterArn"
+                        ]
+                      },
+                      {
+                        "Ref": "ExistingDatabaseClusterArn"
+                      }
+                    ]
+                  }
+                },
+                {
+                  "Effect": "Allow",
+                  "Action": [
+                    "secretsmanager:GetSecretValue"
+                  ],
+                  "Resource": {
+                    "Fn::If": [
+                      "CreateDatabase",
+                      {
+                        "Fn::GetAtt": [
+                          "Database",
+                          "MasterUserSecret.SecretArn"
+                        ]
+                      },
+                      {
+                        "Ref": "ExistingDatabaseSecretArn"
+                      }
+                    ]
+                  }
+                },
+                {
+                  "Effect": "Allow",
+                  "Action": [
+                    "secretsmanager:GetSecretValue",
+                    "secretsmanager:DescribeSecret",
+                    "secretsmanager:PutSecretValue"
+                  ],
+                  "Resource": {
+                    "Fn::Sub": "arn:${AWS::Partition}:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:/spacemade/fargate/${AWS::StackName}/tenants/*"
+                  }
+                },
+                {
+                  "Effect": "Allow",
+                  "Action": [
+                    "logs:CreateLogStream",
+                    "logs:PutLogEvents"
+                  ],
+                  "Resource": {
+                    "Fn::GetAtt": [
+                      "TenantDatabaseLogs",
+                      "Arn"
+                    ]
+                  }
+                }
+              ]
+            }
+          }
+        ]
+      }
+    },
+    "TenantDatabaseLogs": {
+      "Type": "AWS::Logs::LogGroup",
+      "Condition": "HasDatabase",
+      "DeletionPolicy": "Retain",
+      "UpdateReplacePolicy": "Retain",
+      "Properties": {
+        "LogGroupName": {
+          "Fn::Sub": "/aws/lambda/${AWS::StackName}-tenant-database"
+        },
+        "RetentionInDays": 90
+      }
+    },
+    "TenantDatabaseProvider": {
+      "Type": "AWS::Lambda::Function",
+      "Condition": "HasDatabase",
+      "Properties": {
+        "Runtime": "python3.13",
+        "Handler": "index.handler",
+        "Timeout": 120,
+        "Role": {
+          "Fn::GetAtt": [
+            "TenantDatabaseRole",
+            "Arn"
+          ]
+        },
+        "LoggingConfig": {
+          "LogGroup": {
+            "Ref": "TenantDatabaseLogs"
+          }
+        },
+        "Environment": {
+          "Variables": {
+            "CLUSTER_ARN": {
+              "Fn::If": [
+                "CreateDatabase",
+                {
+                  "Fn::GetAtt": [
+                    "Database",
+                    "DBClusterArn"
+                  ]
+                },
+                {
+                  "Ref": "ExistingDatabaseClusterArn"
+                }
+              ]
+            },
+            "ADMIN_SECRET_ARN": {
+              "Fn::If": [
+                "CreateDatabase",
+                {
+                  "Fn::GetAtt": [
+                    "Database",
+                    "MasterUserSecret.SecretArn"
+                  ]
+                },
+                {
+                  "Ref": "ExistingDatabaseSecretArn"
+                }
+              ]
+            },
+            "PLATFORM_STACK_ID": {
+              "Ref": "AWS::StackId"
+            }
+          }
+        },
+        "Code": {
+          "ZipFile": "\"\"\"CloudFormation-only tenant database allocation on the host's Aurora MySQL.\n\nCredentials never appear in the custom-resource response or logs. Database and\nuser identities derive from the application stack, not caller-supplied SQL.\n\"\"\"\nimport hashlib\nimport json\nimport os\nimport re\nimport urllib.request\n\nimport boto3\n\n\ndef identities(stack_id):\n    digest = hashlib.sha256(stack_id.encode()).hexdigest()\n    return 'd' + digest[:32], 'u' + digest[:24]\n\n\ndef provision(event, secrets, data, environment):\n    stack = event['StackId']\n    if not stack.startswith('arn:aws:cloudformation:'):\n        raise ValueError('Invalid application stack identity')\n    database, username = identities(stack)\n    physical_id = environment['CLUSTER_ARN'] + '/' + database\n    props = event['ResourceProperties']\n    secret_arn = props['TenantSecretArn']\n    # The execution role scopes access to this platform's tenant secret prefix.\n    secret = secrets.describe_secret(SecretId=secret_arn)\n    tags = {tag['Key']: tag['Value'] for tag in secret.get('Tags', [])}\n    if tags.get('PlatformStackId') != environment['PLATFORM_STACK_ID'] or tags.get('ApplicationStackId') != stack:\n        raise ValueError('Tenant secret does not belong to this application and platform')\n    if event['RequestType'] == 'Update':\n        old = event.get('OldResourceProperties', {})\n        if old.get('TenantSecretArn') != secret_arn:\n            raise ValueError('Changing a database allocation secret requires an explicit migration')\n    if event.get('PhysicalResourceId', physical_id) != physical_id:\n        raise ValueError('Database allocation identity mismatch')\n    if event['RequestType'] == 'Delete':\n        # The provider cannot drop tenant data. Removal/retention is a separate\n        # reviewed data lifecycle; rollback must never destroy an existing DB.\n        return physical_id, {'DatabaseName': database, 'DatabaseUser': username, 'Retained': True}\n    if event['RequestType'] not in ('Create', 'Update'):\n        raise ValueError('Unsupported CloudFormation request')\n    values = json.loads(secrets.get_secret_value(SecretId=secret_arn)['SecretString'])\n    password = values['db_password']\n    if not isinstance(password, str) or not re.fullmatch(r'[A-Za-z0-9]{32,64}', password):\n        raise ValueError('Tenant database password must be generated alphanumeric credentials')\n    args = {'resourceArn': environment['CLUSTER_ARN'], 'secretArn': environment['ADMIN_SECRET_ARN']}\n    # Identifiers are hex-only; passwords are validated alphanumeric. The SQL\n    # grammar never includes hostnames, names, or statements supplied by callers.\n    statements = [\n        f'CREATE DATABASE IF NOT EXISTS `{database}` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci',\n        f\"CREATE USER IF NOT EXISTS '{username}'@'%' IDENTIFIED BY '{password}'\",\n        f\"ALTER USER '{username}'@'%' IDENTIFIED BY '{password}'\",\n        f\"GRANT ALL PRIVILEGES ON `{database}`.* TO '{username}'@'%'\",\n    ]\n    for statement in statements:\n        data.execute_statement(**args, sql=statement)\n    values.update(db_user=username, db_database=database)\n    secrets.put_secret_value(SecretId=secret_arn, SecretString=json.dumps(values), ClientRequestToken=event['RequestId'])\n    return physical_id, {'DatabaseName': database, 'DatabaseUser': username, 'TenantSecretArn': secret_arn}\n\n\ndef handler(event, context):\n    physical_id = event.get('PhysicalResourceId', context.log_stream_name)\n    result = {}\n    status = 'FAILED'\n    try:\n        physical_id, result = provision(event, boto3.client('secretsmanager'), boto3.client('rds-data'), os.environ)\n        status = 'SUCCESS'\n    except Exception:\n        # SQL service errors can contain credentials. Do not return or log them.\n        pass\n    response = {\n        'Status': status,\n        'Reason': 'Tenant database allocation completed' if status == 'SUCCESS' else 'Tenant database allocation failed; verify platform ownership, credentials and Data API availability',\n        'PhysicalResourceId': physical_id,\n        'StackId': event['StackId'], 'RequestId': event['RequestId'],\n        'LogicalResourceId': event['LogicalResourceId'], 'NoEcho': True, 'Data': result,\n    }\n    body = json.dumps(response).encode()\n    request = urllib.request.Request(event['ResponseURL'], data=body, method='PUT', headers={'Content-Type': '', 'Content-Length': str(len(body))})\n    with urllib.request.urlopen(request, timeout=20) as connection:\n        connection.read()\n"
+        }
       }
     }
   },
@@ -161,18 +457,37 @@
       }
     },
     "ListenerArn": {
+      "Condition": "HasLoadBalancer",
       "Value": {
-        "Ref": "HttpsListener"
+        "Fn::If": [
+          "CreateLoadBalancer",
+          {
+            "Ref": "HttpsListener"
+          },
+          {
+            "Ref": "ExistingListenerArn"
+          }
+        ]
       }
     },
     "LoadBalancerArn": {
       "Value": {
         "Ref": "ALB"
-      }
+      },
+      "Condition": "CreateLoadBalancer"
     },
     "LoadBalancerSecurityGroup": {
+      "Condition": "HasLoadBalancer",
       "Value": {
-        "Ref": "AlbSecurityGroup"
+        "Fn::If": [
+          "CreateLoadBalancer",
+          {
+            "Ref": "AlbSecurityGroup"
+          },
+          {
+            "Ref": "ExistingLoadBalancerSecurityGroup"
+          }
+        ]
       }
     },
     "LoadBalancerDnsName": {
@@ -181,7 +496,8 @@
           "ALB",
           "DNSName"
         ]
-      }
+      },
+      "Condition": "CreateLoadBalancer"
     },
     "LoadBalancerCanonicalHostedZoneId": {
       "Value": {
@@ -189,7 +505,8 @@
           "ALB",
           "CanonicalHostedZoneID"
         ]
-      }
+      },
+      "Condition": "CreateLoadBalancer"
     },
     "ClusterArn": {
       "Value": {
@@ -212,6 +529,308 @@
     },
     "AttachmentContractVersion": {
       "Value": "1"
+    },
+    "DatabaseClusterArn": {
+      "Condition": "HasDatabase",
+      "Value": {
+        "Fn::If": [
+          "CreateDatabase",
+          {
+            "Fn::GetAtt": [
+              "Database",
+              "DBClusterArn"
+            ]
+          },
+          {
+            "Ref": "ExistingDatabaseClusterArn"
+          }
+        ]
+      }
+    },
+    "DatabaseEndpoint": {
+      "Condition": "HasDatabase",
+      "Value": {
+        "Fn::If": [
+          "CreateDatabase",
+          {
+            "Fn::GetAtt": [
+              "Database",
+              "Endpoint.Address"
+            ]
+          },
+          {
+            "Ref": "ExistingDatabaseEndpoint"
+          }
+        ]
+      }
+    },
+    "DatabaseSecurityGroup": {
+      "Condition": "HasDatabase",
+      "Value": {
+        "Fn::If": [
+          "CreateDatabase",
+          {
+            "Ref": "DatabaseSecurityGroup"
+          },
+          {
+            "Ref": "ExistingDatabaseSecurityGroup"
+          }
+        ]
+      }
+    },
+    "TenantDatabaseProviderArn": {
+      "Condition": "HasDatabase",
+      "Value": {
+        "Fn::GetAtt": [
+          "TenantDatabaseProvider",
+          "Arn"
+        ]
+      }
+    },
+    "PlatformStackName": {
+      "Value": {
+        "Ref": "AWS::StackName"
+      }
+    },
+    "PlatformStackId": {
+      "Value": {
+        "Ref": "AWS::StackId"
+      }
+    }
+  },
+  "Conditions": {
+    "CreateLoadBalancer": {
+      "Fn::Equals": [
+        {
+          "Ref": "LoadBalancerMode"
+        },
+        "Create"
+      ]
+    },
+    "UseExistingLoadBalancer": {
+      "Fn::Equals": [
+        {
+          "Ref": "LoadBalancerMode"
+        },
+        "Existing"
+      ]
+    },
+    "HasLoadBalancer": {
+      "Fn::Not": [
+        {
+          "Fn::Equals": [
+            {
+              "Ref": "LoadBalancerMode"
+            },
+            "None"
+          ]
+        }
+      ]
+    },
+    "CreateDatabase": {
+      "Fn::Equals": [
+        {
+          "Ref": "DatabaseMode"
+        },
+        "Create"
+      ]
+    },
+    "HasDatabase": {
+      "Fn::Not": [
+        {
+          "Fn::Equals": [
+            {
+              "Ref": "DatabaseMode"
+            },
+            "None"
+          ]
+        }
+      ]
+    }
+  },
+  "Rules": {
+    "NewLoadBalancerInputs": {
+      "RuleCondition": {
+        "Fn::Equals": [
+          {
+            "Ref": "LoadBalancerMode"
+          },
+          "Create"
+        ]
+      },
+      "Assertions": [
+        {
+          "Assert": {
+            "Fn::Not": [
+              {
+                "Fn::Equals": [
+                  {
+                    "Ref": "CertificateArn"
+                  },
+                  ""
+                ]
+              }
+            ]
+          },
+          "AssertDescription": "An issued ACM certificate is required to create the shared HTTPS listener."
+        },
+        {
+          "Assert": {
+            "Fn::Not": [
+              {
+                "Fn::Contains": [
+                  {
+                    "Ref": "PublicSubnets"
+                  },
+                  ""
+                ]
+              }
+            ]
+          },
+          "AssertDescription": "Provide public subnets for the shared ALB."
+        }
+      ]
+    },
+    "ExistingLoadBalancerInputs": {
+      "RuleCondition": {
+        "Fn::Equals": [
+          {
+            "Ref": "LoadBalancerMode"
+          },
+          "Existing"
+        ]
+      },
+      "Assertions": [
+        {
+          "Assert": {
+            "Fn::Not": [
+              {
+                "Fn::Equals": [
+                  {
+                    "Ref": "ExistingListenerArn"
+                  },
+                  ""
+                ]
+              }
+            ]
+          },
+          "AssertDescription": "ExistingListenerArn is required for an existing shared load balancer."
+        },
+        {
+          "Assert": {
+            "Fn::Not": [
+              {
+                "Fn::Equals": [
+                  {
+                    "Ref": "ExistingLoadBalancerSecurityGroup"
+                  },
+                  ""
+                ]
+              }
+            ]
+          },
+          "AssertDescription": "ExistingLoadBalancerSecurityGroup is required for an existing shared load balancer."
+        }
+      ]
+    },
+    "NewDatabaseInputs": {
+      "RuleCondition": {
+        "Fn::Equals": [
+          {
+            "Ref": "DatabaseMode"
+          },
+          "Create"
+        ]
+      },
+      "Assertions": [
+        {
+          "Assert": {
+            "Fn::Not": [
+              {
+                "Fn::Contains": [
+                  {
+                    "Ref": "PrivateSubnets"
+                  },
+                  ""
+                ]
+              }
+            ]
+          },
+          "AssertDescription": "Provide private subnets for the shared database."
+        }
+      ]
+    },
+    "ExistingDatabaseInputs": {
+      "RuleCondition": {
+        "Fn::Equals": [
+          {
+            "Ref": "DatabaseMode"
+          },
+          "Existing"
+        ]
+      },
+      "Assertions": [
+        {
+          "Assert": {
+            "Fn::Not": [
+              {
+                "Fn::Equals": [
+                  {
+                    "Ref": "ExistingDatabaseClusterArn"
+                  },
+                  ""
+                ]
+              }
+            ]
+          },
+          "AssertDescription": "ExistingDatabaseClusterArn is required for an existing shared database."
+        },
+        {
+          "Assert": {
+            "Fn::Not": [
+              {
+                "Fn::Equals": [
+                  {
+                    "Ref": "ExistingDatabaseSecretArn"
+                  },
+                  ""
+                ]
+              }
+            ]
+          },
+          "AssertDescription": "ExistingDatabaseSecretArn is required for an existing shared database."
+        },
+        {
+          "Assert": {
+            "Fn::Not": [
+              {
+                "Fn::Equals": [
+                  {
+                    "Ref": "ExistingDatabaseEndpoint"
+                  },
+                  ""
+                ]
+              }
+            ]
+          },
+          "AssertDescription": "ExistingDatabaseEndpoint is required for an existing shared database."
+        },
+        {
+          "Assert": {
+            "Fn::Not": [
+              {
+                "Fn::Equals": [
+                  {
+                    "Ref": "ExistingDatabaseSecurityGroup"
+                  },
+                  ""
+                ]
+              }
+            ]
+          },
+          "AssertDescription": "ExistingDatabaseSecurityGroup is required for an existing shared database."
+        }
+      ]
     }
   }
 }

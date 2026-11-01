@@ -1,7 +1,9 @@
 export function attachmentFromOutputs(outputs) {
-  const required = ['Cluster', 'ClusterArn', 'ListenerArn', 'LoadBalancerSecurityGroup', 'VpcId'];
+  const required = ['Cluster', 'ClusterArn', 'VpcId'];
   for (const key of required) {
     if (!outputs[key]) throw new Error(`Missing platform output ${key}; update the platform through a reviewed change set.`);
   }
-  return { version: 1, engine: 'fargate', platform: 'Fargate App Hub', parameters: Object.fromEntries(required.map(key => [key, outputs[key]])) };
+  const optional = ['ListenerArn', 'LoadBalancerSecurityGroup', 'DatabaseClusterArn', 'DatabaseEndpoint', 'DatabaseSecurityGroup', 'TenantDatabaseProviderArn', 'PlatformStackName', 'PlatformStackId'];
+  const available = [...required, ...optional.filter(key => outputs[key])];
+  return { version: 1, engine: 'fargate', platform: 'Fargate App Hub', parameters: Object.fromEntries(available.map(key => [key, outputs[key]])) };
 }

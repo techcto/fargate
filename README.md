@@ -94,3 +94,17 @@ Private management terms: SpaceMade charges $5 per provisioned vCPU-month, prora
 ### Release artifact access
 
 Cloud's existing catalog fetcher downloads templates over public HTTPS. The first release uploaded successfully, but anonymous reads returned HTTP 403. `devops/policy/public-release-read.statement.json` is a single proposed statement to merge into the bucket's existing CloudFormation-managed policy after reviewing ownership and current statements. It is not a replacement bucket policy or an executable deployment template. Preserve all unrelated statements and keep non-release prefixes private. S3 account/bucket public-access settings must permit this specific bucket-policy grant; the statement alone cannot override a public-access block. Do not change application buckets, data, credentials, or other prefixes to resolve release access.
+
+## Optional shared platform services
+
+`LoadBalancerMode` accepts `Create` (default), `Existing`, or `None`. Existing mode binds an HTTPS listener and its security group without taking ownership of the load balancer. Compute-only clusters omit the HTTP outputs. HTTP applications must require the listener capability before launch.
+
+`DatabaseMode` accepts `None` (default), `Create`, or `Existing`. Create provisions **one shared Aurora MySQL Serverless v2 cluster**, with a private writer, encryption, seven-day backup retention, a Secrets Manager-managed administrator password, and Data API enabled. It requires private subnets in at least two Availability Zones. Min/max ACU default to 0.5/2; AWS database charges are separate from Fargate management. Existing mode requires an Aurora MySQL Data API cluster, its endpoint, security group and administrator secret. Generic RDS MySQL without Data API requires a different provisioning adapter and is not silently treated as compatible.
+
+The platform exports `TenantDatabaseProviderArn`. Application CloudFormation stacks allocate their database through `Custom::AppHubDatabase`, with `ServiceToken` set to that output and `TenantSecretArn` pointing to an app-owned secret. The secret name must be under `/spacemade/fargate/PLATFORM_STACK_NAME/tenants/` and carry `PlatformStackId` and `ApplicationStackId` tags matching the actual stack identities. Generate its `db_password` as 32–64 alphanumeric characters. The provider derives the database/user identities from the application stack ID, grants access only to that database, and writes `db_user`/`db_database` into the tenant secret. Apps receive their secret; they never receive the platform administrator secret.
+
+App installers create and upgrade tables in their own database. Allocation rollback/delete never drops data. Shared database and writer resources have Retain policies and deletion protection; deleting the compute platform must not delete customer databases. A separate reviewed data-retention/migration flow is needed before permanently removing retained database resources.
+
+The provider source is `functions/tenant-database/index.py`; its deployed inline copy in `apphub.yaml` must match. Local verification: `python3 tests/tenant_database_test.py`. No new pipeline test stage is required.
+
+These templates are prepared for native Cloud integration. They do not by themselves enable metered billing or complete CMS storage/MongoDB provisioning; keep the listing draft until the full launch is verified.

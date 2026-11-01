@@ -6,14 +6,11 @@
   "requiredPlatformOutputs": [
     "Cluster",
     "ClusterArn",
-    "ListenerArn",
-    "LoadBalancerSecurityGroup",
     "VpcId"
   ],
   "applicationParameters": {
     "Cluster": "Cluster",
-    "ListenerArn": "ListenerArn",
-    "LoadBalancerSecurityGroup": "LoadBalancerSecurityGroup",
+    "ClusterArn": "ClusterArn",
     "VpcId": "VpcId"
   },
   "customerInputs": [
@@ -35,7 +32,21 @@
       "listenerRules",
       "storage"
     ],
-    "database": "Separate application database and credentials; existing database service attachment requires an explicit application contract."
+    "database": "Optional shared Aurora MySQL owned by the platform; each application owns its isolated database allocation and secret. Allocation deletion preserves data."
   },
-  "cloudIntegrationStatus": "adapter-required"
+  "cloudIntegrationStatus": "adapter-required",
+  "optionalPlatformOutputs": {
+    "http": [
+      "ListenerArn",
+      "LoadBalancerSecurityGroup"
+    ],
+    "mysql": [
+      "DatabaseClusterArn",
+      "DatabaseEndpoint",
+      "DatabaseSecurityGroup",
+      "TenantDatabaseProviderArn",
+      "PlatformStackName",
+      "PlatformStackId"
+    ]
+  }
 }
