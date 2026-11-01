@@ -25,12 +25,12 @@ if (['status', 'outputs', 'attachment'].includes(command)) {
 } else if (command === 'catalog' || command === 'contract') {
   console.log(readFileSync(command === 'catalog' ? 'configs/apps.json' : 'configs/hosting-contract.json', 'utf8'));
 } else if (command === 'validate') {
-  print(aws(['cloudformation', 'validate-template', '--template-body', 'file://' + template]));
+  print(aws(['cloudformation', 'validate-template', '--template-body', JSON.stringify(JSON.parse(readFileSync(template, 'utf8')))]));
 } else if (command === 'plan') {
   const [type, name, file] = process.argv.slice(3);
   if (!['CREATE', 'UPDATE'].includes(type) || !name || !file) throw new Error('Usage: bash open-fargate.sh plan CREATE|UPDATE change-set-name private.parameters.json');
   print(aws(['cloudformation', 'create-change-set', '--stack-name', stack, '--change-set-name', name,
-    '--change-set-type', type, '--template-body', 'file://' + template, '--parameters', 'file://' + resolve(file), '--capabilities', 'CAPABILITY_IAM']));
+    '--change-set-type', type, '--template-body', JSON.stringify(JSON.parse(readFileSync(template, 'utf8'))), '--parameters', 'file://' + resolve(file), '--capabilities', 'CAPABILITY_IAM']));
 } else if (command === 'plan-app') {
   const [type, appStack, name, templateFile, file] = process.argv.slice(3);
   if (!['CREATE', 'UPDATE'].includes(type) || !appStack || !name || !templateFile || !file) {

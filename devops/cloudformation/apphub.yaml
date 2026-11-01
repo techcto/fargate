@@ -43,9 +43,8 @@
       "Description": "Optional shared Aurora MySQL with Data API. Application stacks allocate isolated databases and users."
     },
     "PrivateSubnets": {
-      "Type": "CommaDelimitedList",
-      "Default": "",
-      "Description": "At least two private subnets in different Availability Zones when creating shared Aurora."
+      "Type": "List<AWS::EC2::Subnet::Id>",
+      "Description": "Private application and data-service subnets in at least two Availability Zones, with outbound service connectivity."
     },
     "ExistingDatabaseClusterArn": {
       "Type": "String",
@@ -75,6 +74,96 @@
       "Default": 2,
       "MinValue": 0.5,
       "MaxValue": 128
+    },
+    "DocumentDbMode": {
+      "Type": "String",
+      "Default": "None",
+      "AllowedValues": [
+        "None",
+        "Create",
+        "Existing"
+      ],
+      "Description": "Optional shared DocumentDB; each application requires a database-scoped tenant user."
+    },
+    "ExistingDocumentDbArn": {
+      "Type": "String",
+      "Default": ""
+    },
+    "ExistingDocumentDbEndpoint": {
+      "Type": "String",
+      "Default": ""
+    },
+    "ExistingDocumentDbSecurityGroup": {
+      "Type": "String",
+      "Default": ""
+    },
+    "DocumentDbInstanceClass": {
+      "Type": "String",
+      "Default": "db.t3.medium"
+    },
+    "FileSystemMode": {
+      "Type": "String",
+      "Default": "None",
+      "AllowedValues": [
+        "None",
+        "Create",
+        "Existing"
+      ],
+      "Description": "Optional shared encrypted EFS; application stacks own isolated access points."
+    },
+    "ExistingFileSystemId": {
+      "Type": "String",
+      "Default": ""
+    },
+    "ExistingFileSystemSecurityGroup": {
+      "Type": "String",
+      "Default": ""
+    },
+    "RedisMode": {
+      "Type": "String",
+      "Default": "None",
+      "AllowedValues": [
+        "None",
+        "Create",
+        "Existing"
+      ],
+      "Description": "Optional shared Valkey/Redis cache. Applications must have restricted ACL credentials and key prefixes."
+    },
+    "ExistingRedisArn": {
+      "Type": "String",
+      "Default": ""
+    },
+    "ExistingRedisEndpoint": {
+      "Type": "String",
+      "Default": ""
+    },
+    "ExistingRedisSecurityGroup": {
+      "Type": "String",
+      "Default": ""
+    },
+    "ExistingRedisUserGroupId": {
+      "Type": "String",
+      "Default": ""
+    },
+    "EnableBackups": {
+      "Type": "String",
+      "Default": "true",
+      "AllowedValues": [
+        "true",
+        "false"
+      ],
+      "Description": "Enroll selected Aurora, DocumentDB and EFS resources in the daily AWS Backup plan. Redis uses native snapshots."
+    },
+    "BackupRetentionDays": {
+      "Type": "Number",
+      "Default": 30,
+      "MinValue": 1,
+      "MaxValue": 3650
+    },
+    "BackupSchedule": {
+      "Type": "String",
+      "Default": "cron(0 5 * * ? *)",
+      "Description": "AWS Backup schedule in UTC."
     }
   },
   "Resources": {
@@ -229,7 +318,9 @@
         "SubnetIds": {
           "Ref": "PrivateSubnets"
         }
-      }
+      },
+      "DeletionPolicy": "Retain",
+      "UpdateReplacePolicy": "Retain"
     },
     "DatabaseSecurityGroup": {
       "Type": "AWS::EC2::SecurityGroup",
@@ -239,7 +330,9 @@
           "Ref": "VpcId"
         },
         "GroupDescription": "App-owned ingress rules grant access to the shared database"
-      }
+      },
+      "DeletionPolicy": "Retain",
+      "UpdateReplacePolicy": "Retain"
     },
     "Database": {
       "Type": "AWS::RDS::DBCluster",
@@ -448,6 +541,597 @@
           "ZipFile": "\"\"\"CloudFormation-only tenant database allocation on the host's Aurora MySQL.\n\nCredentials never appear in the custom-resource response or logs. Database and\nuser identities derive from the application stack, not caller-supplied SQL.\n\"\"\"\nimport hashlib\nimport json\nimport os\nimport re\nimport urllib.request\n\nimport boto3\n\n\ndef identities(stack_id):\n    digest = hashlib.sha256(stack_id.encode()).hexdigest()\n    return 'd' + digest[:32], 'u' + digest[:24]\n\n\ndef provision(event, secrets, data, environment):\n    stack = event['StackId']\n    if not stack.startswith('arn:aws:cloudformation:'):\n        raise ValueError('Invalid application stack identity')\n    database, username = identities(stack)\n    physical_id = environment['CLUSTER_ARN'] + '/' + database\n    props = event['ResourceProperties']\n    secret_arn = props['TenantSecretArn']\n    # The execution role scopes access to this platform's tenant secret prefix.\n    secret = secrets.describe_secret(SecretId=secret_arn)\n    tags = {tag['Key']: tag['Value'] for tag in secret.get('Tags', [])}\n    if tags.get('PlatformStackId') != environment['PLATFORM_STACK_ID'] or tags.get('ApplicationStackId') != stack:\n        raise ValueError('Tenant secret does not belong to this application and platform')\n    if event['RequestType'] == 'Update':\n        old = event.get('OldResourceProperties', {})\n        if old.get('TenantSecretArn') != secret_arn:\n            raise ValueError('Changing a database allocation secret requires an explicit migration')\n    if event.get('PhysicalResourceId', physical_id) != physical_id:\n        raise ValueError('Database allocation identity mismatch')\n    if event['RequestType'] == 'Delete':\n        # The provider cannot drop tenant data. Removal/retention is a separate\n        # reviewed data lifecycle; rollback must never destroy an existing DB.\n        return physical_id, {'DatabaseName': database, 'DatabaseUser': username, 'Retained': True}\n    if event['RequestType'] not in ('Create', 'Update'):\n        raise ValueError('Unsupported CloudFormation request')\n    values = json.loads(secrets.get_secret_value(SecretId=secret_arn)['SecretString'])\n    password = values['db_password']\n    if not isinstance(password, str) or not re.fullmatch(r'[A-Za-z0-9]{32,64}', password):\n        raise ValueError('Tenant database password must be generated alphanumeric credentials')\n    args = {'resourceArn': environment['CLUSTER_ARN'], 'secretArn': environment['ADMIN_SECRET_ARN']}\n    # Identifiers are hex-only; passwords are validated alphanumeric. The SQL\n    # grammar never includes hostnames, names, or statements supplied by callers.\n    statements = [\n        f'CREATE DATABASE IF NOT EXISTS `{database}` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci',\n        f\"CREATE USER IF NOT EXISTS '{username}'@'%' IDENTIFIED BY '{password}'\",\n        f\"ALTER USER '{username}'@'%' IDENTIFIED BY '{password}'\",\n        f\"GRANT ALL PRIVILEGES ON `{database}`.* TO '{username}'@'%'\",\n    ]\n    for statement in statements:\n        data.execute_statement(**args, sql=statement)\n    values.update(db_user=username, db_database=database)\n    secrets.put_secret_value(SecretId=secret_arn, SecretString=json.dumps(values), ClientRequestToken=event['RequestId'])\n    return physical_id, {'DatabaseName': database, 'DatabaseUser': username, 'TenantSecretArn': secret_arn}\n\n\ndef handler(event, context):\n    physical_id = event.get('PhysicalResourceId', context.log_stream_name)\n    result = {}\n    status = 'FAILED'\n    try:\n        physical_id, result = provision(event, boto3.client('secretsmanager'), boto3.client('rds-data'), os.environ)\n        status = 'SUCCESS'\n    except Exception:\n        # SQL service errors can contain credentials. Do not return or log them.\n        pass\n    response = {\n        'Status': status,\n        'Reason': 'Tenant database allocation completed' if status == 'SUCCESS' else 'Tenant database allocation failed; verify platform ownership, credentials and Data API availability',\n        'PhysicalResourceId': physical_id,\n        'StackId': event['StackId'], 'RequestId': event['RequestId'],\n        'LogicalResourceId': event['LogicalResourceId'], 'NoEcho': True, 'Data': result,\n    }\n    body = json.dumps(response).encode()\n    request = urllib.request.Request(event['ResponseURL'], data=body, method='PUT', headers={'Content-Type': '', 'Content-Length': str(len(body))})\n    with urllib.request.urlopen(request, timeout=20) as connection:\n        connection.read()\n"
         }
       }
+    },
+    "DocumentDbSecurityGroup": {
+      "Type": "AWS::EC2::SecurityGroup",
+      "Properties": {
+        "VpcId": {
+          "Ref": "VpcId"
+        },
+        "GroupDescription": "App-owned ingress permits access to shared DocumentDB"
+      },
+      "Condition": "CreateDocumentDb",
+      "DeletionPolicy": "Retain",
+      "UpdateReplacePolicy": "Retain"
+    },
+    "DocumentDbSubnetGroup": {
+      "Type": "AWS::DocDB::DBSubnetGroup",
+      "Condition": "CreateDocumentDb",
+      "Properties": {
+        "DBSubnetGroupDescription": "App Hub private DocumentDB subnets",
+        "SubnetIds": {
+          "Ref": "PrivateSubnets"
+        }
+      },
+      "DeletionPolicy": "Retain",
+      "UpdateReplacePolicy": "Retain"
+    },
+    "DocumentDbAdminSecret": {
+      "Type": "AWS::SecretsManager::Secret",
+      "Condition": "CreateDocumentDb",
+      "DeletionPolicy": "Retain",
+      "UpdateReplacePolicy": "Retain",
+      "Properties": {
+        "GenerateSecretString": {
+          "SecretStringTemplate": "{\"username\":\"platformadmin\"}",
+          "GenerateStringKey": "password",
+          "PasswordLength": 48,
+          "ExcludePunctuation": true
+        }
+      }
+    },
+    "DocumentDb": {
+      "Type": "AWS::DocDB::DBCluster",
+      "Condition": "CreateDocumentDb",
+      "DeletionPolicy": "Retain",
+      "UpdateReplacePolicy": "Retain",
+      "Properties": {
+        "MasterUsername": "platformadmin",
+        "MasterUserPassword": {
+          "Fn::Sub": "{{resolve:secretsmanager:${DocumentDbAdminSecret}:SecretString:password}}"
+        },
+        "DBSubnetGroupName": {
+          "Ref": "DocumentDbSubnetGroup"
+        },
+        "VpcSecurityGroupIds": [
+          {
+            "Ref": "DocumentDbSecurityGroup"
+          }
+        ],
+        "StorageEncrypted": true,
+        "BackupRetentionPeriod": 7,
+        "DeletionProtection": true
+      }
+    },
+    "DocumentDbWriter": {
+      "Type": "AWS::DocDB::DBInstance",
+      "Condition": "CreateDocumentDb",
+      "DeletionPolicy": "Retain",
+      "UpdateReplacePolicy": "Retain",
+      "Properties": {
+        "DBClusterIdentifier": {
+          "Ref": "DocumentDb"
+        },
+        "DBInstanceClass": {
+          "Ref": "DocumentDbInstanceClass"
+        },
+        "AutoMinorVersionUpgrade": true
+      }
+    },
+    "FileSystemSecurityGroup": {
+      "Type": "AWS::EC2::SecurityGroup",
+      "Properties": {
+        "VpcId": {
+          "Ref": "VpcId"
+        },
+        "GroupDescription": "App-owned access-point clients connect to EFS"
+      },
+      "Condition": "CreateFileSystem"
+    },
+    "FileSystem": {
+      "Type": "AWS::EFS::FileSystem",
+      "Condition": "CreateFileSystem",
+      "DeletionPolicy": "Retain",
+      "UpdateReplacePolicy": "Retain",
+      "Properties": {
+        "Encrypted": true,
+        "FileSystemPolicy": {
+          "Version": "2012-10-17",
+          "Statement": [
+            {
+              "Effect": "Deny",
+              "Principal": "*",
+              "Action": [
+                "elasticfilesystem:ClientMount",
+                "elasticfilesystem:ClientWrite",
+                "elasticfilesystem:ClientRootAccess"
+              ],
+              "Resource": "*",
+              "Condition": {
+                "Bool": {
+                  "aws:SecureTransport": "false"
+                }
+              }
+            }
+          ]
+        }
+      }
+    },
+    "FileSystemMount1": {
+      "Type": "AWS::EFS::MountTarget",
+      "Condition": "CreateFileSystem",
+      "Properties": {
+        "FileSystemId": {
+          "Ref": "FileSystem"
+        },
+        "SubnetId": {
+          "Fn::Select": [
+            0,
+            {
+              "Ref": "PrivateSubnets"
+            }
+          ]
+        },
+        "SecurityGroups": [
+          {
+            "Ref": "FileSystemSecurityGroup"
+          }
+        ]
+      }
+    },
+    "FileSystemMount2": {
+      "Type": "AWS::EFS::MountTarget",
+      "Condition": "CreateFileSystem",
+      "Properties": {
+        "FileSystemId": {
+          "Ref": "FileSystem"
+        },
+        "SubnetId": {
+          "Fn::Select": [
+            1,
+            {
+              "Ref": "PrivateSubnets"
+            }
+          ]
+        },
+        "SecurityGroups": [
+          {
+            "Ref": "FileSystemSecurityGroup"
+          }
+        ]
+      }
+    },
+    "RedisSecurityGroup": {
+      "Type": "AWS::EC2::SecurityGroup",
+      "Properties": {
+        "VpcId": {
+          "Ref": "VpcId"
+        },
+        "GroupDescription": "App-owned ingress permits TLS cache connections"
+      },
+      "Condition": "CreateRedis",
+      "DeletionPolicy": "Retain",
+      "UpdateReplacePolicy": "Retain"
+    },
+    "RedisDisabledDefaultUser": {
+      "Type": "AWS::ElastiCache::User",
+      "Condition": "CreateRedis",
+      "Properties": {
+        "UserId": {
+          "Fn::Join": [
+            "",
+            [
+              "hub-",
+              {
+                "Fn::Select": [
+                  2,
+                  {
+                    "Fn::Split": [
+                      "/",
+                      {
+                        "Ref": "AWS::StackId"
+                      }
+                    ]
+                  }
+                ]
+              }
+            ]
+          ]
+        },
+        "UserName": "default",
+        "Engine": "valkey",
+        "AccessString": "off -@all",
+        "AuthenticationMode": {
+          "Type": "password",
+          "Passwords": [
+            {
+              "Fn::Sub": "{{resolve:secretsmanager:${RedisDisabledSecret}:SecretString:password}}"
+            }
+          ]
+        }
+      },
+      "DeletionPolicy": "Retain",
+      "UpdateReplacePolicy": "Retain"
+    },
+    "RedisUserGroup": {
+      "Type": "AWS::ElastiCache::UserGroup",
+      "Condition": "CreateRedis",
+      "Properties": {
+        "UserGroupId": {
+          "Fn::Join": [
+            "",
+            [
+              "hub-",
+              {
+                "Fn::Select": [
+                  2,
+                  {
+                    "Fn::Split": [
+                      "/",
+                      {
+                        "Ref": "AWS::StackId"
+                      }
+                    ]
+                  }
+                ]
+              }
+            ]
+          ]
+        },
+        "Engine": "valkey",
+        "UserIds": [
+          {
+            "Ref": "RedisDisabledDefaultUser"
+          }
+        ]
+      },
+      "DeletionPolicy": "Retain",
+      "UpdateReplacePolicy": "Retain"
+    },
+    "Redis": {
+      "Type": "AWS::ElastiCache::ServerlessCache",
+      "Condition": "CreateRedis",
+      "DeletionPolicy": "Retain",
+      "UpdateReplacePolicy": "Retain",
+      "Properties": {
+        "ServerlessCacheName": {
+          "Fn::Join": [
+            "",
+            [
+              "hub-",
+              {
+                "Fn::Select": [
+                  2,
+                  {
+                    "Fn::Split": [
+                      "/",
+                      {
+                        "Ref": "AWS::StackId"
+                      }
+                    ]
+                  }
+                ]
+              }
+            ]
+          ]
+        },
+        "Engine": "valkey",
+        "SubnetIds": {
+          "Ref": "PrivateSubnets"
+        },
+        "SecurityGroupIds": [
+          {
+            "Ref": "RedisSecurityGroup"
+          }
+        ],
+        "UserGroupId": {
+          "Ref": "RedisUserGroup"
+        },
+        "SnapshotRetentionLimit": 7,
+        "DailySnapshotTime": "05:00"
+      }
+    },
+    "BackupVault": {
+      "Type": "AWS::Backup::BackupVault",
+      "Condition": "EnableDataBackups",
+      "DeletionPolicy": "Retain",
+      "UpdateReplacePolicy": "Retain",
+      "Properties": {
+        "BackupVaultName": {
+          "Fn::Join": [
+            "",
+            [
+              "hub-",
+              {
+                "Fn::Select": [
+                  2,
+                  {
+                    "Fn::Split": [
+                      "/",
+                      {
+                        "Ref": "AWS::StackId"
+                      }
+                    ]
+                  }
+                ]
+              }
+            ]
+          ]
+        }
+      }
+    },
+    "BackupRole": {
+      "Type": "AWS::IAM::Role",
+      "Condition": "EnableDataBackups",
+      "Properties": {
+        "AssumeRolePolicyDocument": {
+          "Version": "2012-10-17",
+          "Statement": [
+            {
+              "Effect": "Allow",
+              "Principal": {
+                "Service": "backup.amazonaws.com"
+              },
+              "Action": "sts:AssumeRole"
+            }
+          ]
+        },
+        "ManagedPolicyArns": [
+          {
+            "Fn::Sub": "arn:${AWS::Partition}:iam::aws:policy/service-role/AWSBackupServiceRolePolicyForBackup"
+          },
+          {
+            "Fn::Sub": "arn:${AWS::Partition}:iam::aws:policy/service-role/AWSBackupServiceRolePolicyForRestores"
+          }
+        ]
+      }
+    },
+    "BackupPlan": {
+      "Type": "AWS::Backup::BackupPlan",
+      "Condition": "EnableDataBackups",
+      "Properties": {
+        "BackupPlan": {
+          "BackupPlanName": "Fargate App Hub shared data",
+          "BackupPlanRule": [
+            {
+              "RuleName": "daily-shared-data",
+              "TargetBackupVault": {
+                "Ref": "BackupVault"
+              },
+              "ScheduleExpression": {
+                "Ref": "BackupSchedule"
+              },
+              "StartWindowMinutes": 60,
+              "CompletionWindowMinutes": 360,
+              "Lifecycle": {
+                "DeleteAfterDays": {
+                  "Ref": "BackupRetentionDays"
+                }
+              }
+            }
+          ]
+        }
+      }
+    },
+    "BackupSelection": {
+      "Type": "AWS::Backup::BackupSelection",
+      "Condition": "EnableDataBackups",
+      "Properties": {
+        "BackupPlanId": {
+          "Ref": "BackupPlan"
+        },
+        "BackupSelection": {
+          "SelectionName": "apphub-shared-data",
+          "IamRoleArn": {
+            "Fn::GetAtt": [
+              "BackupRole",
+              "Arn"
+            ]
+          },
+          "Resources": [
+            {
+              "Fn::If": [
+                "HasDatabase",
+                {
+                  "Fn::If": [
+                    "CreateDatabase",
+                    {
+                      "Fn::GetAtt": [
+                        "Database",
+                        "DBClusterArn"
+                      ]
+                    },
+                    {
+                      "Ref": "ExistingDatabaseClusterArn"
+                    }
+                  ]
+                },
+                {
+                  "Ref": "AWS::NoValue"
+                }
+              ]
+            },
+            {
+              "Fn::If": [
+                "HasDocumentDb",
+                {
+                  "Fn::If": [
+                    "CreateDocumentDb",
+                    {
+                      "Fn::Sub": "arn:${AWS::Partition}:rds:${AWS::Region}:${AWS::AccountId}:cluster:${DocumentDb}"
+                    },
+                    {
+                      "Ref": "ExistingDocumentDbArn"
+                    }
+                  ]
+                },
+                {
+                  "Ref": "AWS::NoValue"
+                }
+              ]
+            },
+            {
+              "Fn::If": [
+                "HasFileSystem",
+                {
+                  "Fn::Sub": [
+                    "arn:${AWS::Partition}:elasticfilesystem:${AWS::Region}:${AWS::AccountId}:file-system/${FileSystemId}",
+                    {
+                      "FileSystemId": {
+                        "Fn::If": [
+                          "CreateFileSystem",
+                          {
+                            "Ref": "FileSystem"
+                          },
+                          {
+                            "Ref": "ExistingFileSystemId"
+                          }
+                        ]
+                      }
+                    }
+                  ]
+                },
+                {
+                  "Ref": "AWS::NoValue"
+                }
+              ]
+            }
+          ]
+        }
+      }
+    },
+    "RedisDisabledSecret": {
+      "Type": "AWS::SecretsManager::Secret",
+      "Condition": "CreateRedis",
+      "DeletionPolicy": "Retain",
+      "UpdateReplacePolicy": "Retain",
+      "Properties": {
+        "GenerateSecretString": {
+          "SecretStringTemplate": "{}",
+          "GenerateStringKey": "password",
+          "PasswordLength": 48,
+          "ExcludePunctuation": true
+        }
+      }
+    },
+    "TaskEvents": {
+      "Type": "AWS::Logs::LogGroup",
+      "DeletionPolicy": "Retain",
+      "UpdateReplacePolicy": "Retain",
+      "Properties": {
+        "LogGroupName": {
+          "Fn::Sub": "/spacemade/fargate/${AWS::StackName}/task-events"
+        },
+        "RetentionInDays": 90
+      }
+    },
+    "TaskEventsPolicy": {
+      "Type": "AWS::Logs::ResourcePolicy",
+      "Properties": {
+        "PolicyName": {
+          "Fn::Join": [
+            "",
+            [
+              "hub-",
+              {
+                "Fn::Select": [
+                  2,
+                  {
+                    "Fn::Split": [
+                      "/",
+                      {
+                        "Ref": "AWS::StackId"
+                      }
+                    ]
+                  }
+                ]
+              }
+            ]
+          ]
+        },
+        "PolicyDocument": {
+          "Fn::Sub": [
+            "{\"Version\": \"2012-10-17\", \"Statement\": [{\"Effect\": \"Allow\", \"Principal\": {\"Service\": \"events.amazonaws.com\"}, \"Action\": [\"logs:CreateLogStream\", \"logs:PutLogEvents\"], \"Resource\": \"arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:log-group:${TaskEvents}:*\", \"Condition\": {\"StringEquals\": {\"aws:SourceAccount\": \"${AWS::AccountId}\"}, \"ArnEquals\": {\"aws:SourceArn\": \"arn:${AWS::Partition}:events:${AWS::Region}:${AWS::AccountId}:rule/${RuleName}\"}}}]}",
+            {
+              "RuleName": {
+                "Fn::Join": [
+                  "",
+                  [
+                    "hub-",
+                    {
+                      "Fn::Select": [
+                        2,
+                        {
+                          "Fn::Split": [
+                            "/",
+                            {
+                              "Ref": "AWS::StackId"
+                            }
+                          ]
+                        }
+                      ]
+                    }
+                  ]
+                ]
+              }
+            }
+          ]
+        }
+      }
+    },
+    "TaskEventsRule": {
+      "Type": "AWS::Events::Rule",
+      "DependsOn": "TaskEventsPolicy",
+      "Properties": {
+        "Name": {
+          "Fn::Join": [
+            "",
+            [
+              "hub-",
+              {
+                "Fn::Select": [
+                  2,
+                  {
+                    "Fn::Split": [
+                      "/",
+                      {
+                        "Ref": "AWS::StackId"
+                      }
+                    ]
+                  }
+                ]
+              }
+            ]
+          ]
+        },
+        "State": "ENABLED",
+        "EventPattern": {
+          "source": [
+            "aws.ecs"
+          ],
+          "detail-type": [
+            "ECS Task State Change"
+          ],
+          "detail": {
+            "clusterArn": [
+              {
+                "Fn::GetAtt": [
+                  "Cluster",
+                  "Arn"
+                ]
+              }
+            ]
+          }
+        },
+        "Targets": [
+          {
+            "Id": "task-lifecycle-journal",
+            "Arn": {
+              "Fn::Sub": "arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:log-group:${TaskEvents}"
+            }
+          }
+        ]
+      }
     }
   },
   "Outputs": {
@@ -596,6 +1280,168 @@
       "Value": {
         "Ref": "AWS::StackId"
       }
+    },
+    "DocumentDbArn": {
+      "Condition": "HasDocumentDb",
+      "Value": {
+        "Fn::If": [
+          "CreateDocumentDb",
+          {
+            "Fn::Sub": "arn:${AWS::Partition}:rds:${AWS::Region}:${AWS::AccountId}:cluster:${DocumentDb}"
+          },
+          {
+            "Ref": "ExistingDocumentDbArn"
+          }
+        ]
+      }
+    },
+    "DocumentDbEndpoint": {
+      "Condition": "HasDocumentDb",
+      "Value": {
+        "Fn::If": [
+          "CreateDocumentDb",
+          {
+            "Fn::GetAtt": [
+              "DocumentDb",
+              "Endpoint"
+            ]
+          },
+          {
+            "Ref": "ExistingDocumentDbEndpoint"
+          }
+        ]
+      }
+    },
+    "DocumentDbSecurityGroup": {
+      "Condition": "HasDocumentDb",
+      "Value": {
+        "Fn::If": [
+          "CreateDocumentDb",
+          {
+            "Ref": "DocumentDbSecurityGroup"
+          },
+          {
+            "Ref": "ExistingDocumentDbSecurityGroup"
+          }
+        ]
+      }
+    },
+    "EfsFileSystemId": {
+      "Condition": "HasFileSystem",
+      "Value": {
+        "Fn::If": [
+          "CreateFileSystem",
+          {
+            "Ref": "FileSystem"
+          },
+          {
+            "Ref": "ExistingFileSystemId"
+          }
+        ]
+      }
+    },
+    "EfsSecurityGroup": {
+      "Condition": "HasFileSystem",
+      "Value": {
+        "Fn::If": [
+          "CreateFileSystem",
+          {
+            "Ref": "FileSystemSecurityGroup"
+          },
+          {
+            "Ref": "ExistingFileSystemSecurityGroup"
+          }
+        ]
+      }
+    },
+    "RedisArn": {
+      "Condition": "HasRedis",
+      "Value": {
+        "Fn::If": [
+          "CreateRedis",
+          {
+            "Fn::GetAtt": [
+              "Redis",
+              "ARN"
+            ]
+          },
+          {
+            "Ref": "ExistingRedisArn"
+          }
+        ]
+      }
+    },
+    "RedisHost": {
+      "Condition": "HasRedis",
+      "Value": {
+        "Fn::If": [
+          "CreateRedis",
+          {
+            "Fn::GetAtt": [
+              "Redis",
+              "Endpoint.Address"
+            ]
+          },
+          {
+            "Ref": "ExistingRedisEndpoint"
+          }
+        ]
+      }
+    },
+    "RedisSecurityGroup": {
+      "Condition": "HasRedis",
+      "Value": {
+        "Fn::If": [
+          "CreateRedis",
+          {
+            "Ref": "RedisSecurityGroup"
+          },
+          {
+            "Ref": "ExistingRedisSecurityGroup"
+          }
+        ]
+      }
+    },
+    "RedisUserGroupId": {
+      "Condition": "HasRedis",
+      "Value": {
+        "Fn::If": [
+          "CreateRedis",
+          {
+            "Ref": "RedisUserGroup"
+          },
+          {
+            "Ref": "ExistingRedisUserGroupId"
+          }
+        ]
+      }
+    },
+    "BackupPlanId": {
+      "Condition": "EnableDataBackups",
+      "Value": {
+        "Ref": "BackupPlan"
+      }
+    },
+    "BackupVaultName": {
+      "Condition": "EnableDataBackups",
+      "Value": {
+        "Ref": "BackupVault"
+      }
+    },
+    "ServiceSubnets": {
+      "Value": {
+        "Fn::Join": [
+          ",",
+          {
+            "Ref": "PrivateSubnets"
+          }
+        ]
+      }
+    },
+    "TaskEventsLogGroup": {
+      "Value": {
+        "Ref": "TaskEvents"
+      }
     }
   },
   "Conditions": {
@@ -643,6 +1489,91 @@
               "Ref": "DatabaseMode"
             },
             "None"
+          ]
+        }
+      ]
+    },
+    "CreateDocumentDb": {
+      "Fn::Equals": [
+        {
+          "Ref": "DocumentDbMode"
+        },
+        "Create"
+      ]
+    },
+    "HasDocumentDb": {
+      "Fn::Not": [
+        {
+          "Fn::Equals": [
+            {
+              "Ref": "DocumentDbMode"
+            },
+            "None"
+          ]
+        }
+      ]
+    },
+    "CreateFileSystem": {
+      "Fn::Equals": [
+        {
+          "Ref": "FileSystemMode"
+        },
+        "Create"
+      ]
+    },
+    "HasFileSystem": {
+      "Fn::Not": [
+        {
+          "Fn::Equals": [
+            {
+              "Ref": "FileSystemMode"
+            },
+            "None"
+          ]
+        }
+      ]
+    },
+    "CreateRedis": {
+      "Fn::Equals": [
+        {
+          "Ref": "RedisMode"
+        },
+        "Create"
+      ]
+    },
+    "HasRedis": {
+      "Fn::Not": [
+        {
+          "Fn::Equals": [
+            {
+              "Ref": "RedisMode"
+            },
+            "None"
+          ]
+        }
+      ]
+    },
+    "EnableDataBackups": {
+      "Fn::And": [
+        {
+          "Fn::Equals": [
+            {
+              "Ref": "EnableBackups"
+            },
+            "true"
+          ]
+        },
+        {
+          "Fn::Or": [
+            {
+              "Condition": "HasDatabase"
+            },
+            {
+              "Condition": "HasDocumentDb"
+            },
+            {
+              "Condition": "HasFileSystem"
+            }
           ]
         }
       ]
@@ -829,6 +1760,258 @@
             ]
           },
           "AssertDescription": "ExistingDatabaseSecurityGroup is required for an existing shared database."
+        }
+      ]
+    },
+    "ExistingDocumentDbInputs": {
+      "RuleCondition": {
+        "Fn::Equals": [
+          {
+            "Ref": "DocumentDbMode"
+          },
+          "Existing"
+        ]
+      },
+      "Assertions": [
+        {
+          "Assert": {
+            "Fn::Not": [
+              {
+                "Fn::Equals": [
+                  {
+                    "Ref": "ExistingDocumentDbArn"
+                  },
+                  ""
+                ]
+              }
+            ]
+          },
+          "AssertDescription": "ExistingDocumentDbArn is required."
+        },
+        {
+          "Assert": {
+            "Fn::Not": [
+              {
+                "Fn::Equals": [
+                  {
+                    "Ref": "ExistingDocumentDbEndpoint"
+                  },
+                  ""
+                ]
+              }
+            ]
+          },
+          "AssertDescription": "ExistingDocumentDbEndpoint is required."
+        },
+        {
+          "Assert": {
+            "Fn::Not": [
+              {
+                "Fn::Equals": [
+                  {
+                    "Ref": "ExistingDocumentDbSecurityGroup"
+                  },
+                  ""
+                ]
+              }
+            ]
+          },
+          "AssertDescription": "ExistingDocumentDbSecurityGroup is required."
+        }
+      ]
+    },
+    "NewDocumentDbSubnets": {
+      "RuleCondition": {
+        "Fn::Equals": [
+          {
+            "Ref": "DocumentDbMode"
+          },
+          "Create"
+        ]
+      },
+      "Assertions": [
+        {
+          "Assert": {
+            "Fn::Not": [
+              {
+                "Fn::Contains": [
+                  {
+                    "Ref": "PrivateSubnets"
+                  },
+                  ""
+                ]
+              }
+            ]
+          },
+          "AssertDescription": "Provide private subnets in two Availability Zones."
+        }
+      ]
+    },
+    "ExistingFileSystemInputs": {
+      "RuleCondition": {
+        "Fn::Equals": [
+          {
+            "Ref": "FileSystemMode"
+          },
+          "Existing"
+        ]
+      },
+      "Assertions": [
+        {
+          "Assert": {
+            "Fn::Not": [
+              {
+                "Fn::Equals": [
+                  {
+                    "Ref": "ExistingFileSystemId"
+                  },
+                  ""
+                ]
+              }
+            ]
+          },
+          "AssertDescription": "ExistingFileSystemId is required."
+        },
+        {
+          "Assert": {
+            "Fn::Not": [
+              {
+                "Fn::Equals": [
+                  {
+                    "Ref": "ExistingFileSystemSecurityGroup"
+                  },
+                  ""
+                ]
+              }
+            ]
+          },
+          "AssertDescription": "ExistingFileSystemSecurityGroup is required."
+        }
+      ]
+    },
+    "NewFileSystemSubnets": {
+      "RuleCondition": {
+        "Fn::Equals": [
+          {
+            "Ref": "FileSystemMode"
+          },
+          "Create"
+        ]
+      },
+      "Assertions": [
+        {
+          "Assert": {
+            "Fn::Not": [
+              {
+                "Fn::Contains": [
+                  {
+                    "Ref": "PrivateSubnets"
+                  },
+                  ""
+                ]
+              }
+            ]
+          },
+          "AssertDescription": "Provide private subnets in two Availability Zones."
+        }
+      ]
+    },
+    "ExistingRedisInputs": {
+      "RuleCondition": {
+        "Fn::Equals": [
+          {
+            "Ref": "RedisMode"
+          },
+          "Existing"
+        ]
+      },
+      "Assertions": [
+        {
+          "Assert": {
+            "Fn::Not": [
+              {
+                "Fn::Equals": [
+                  {
+                    "Ref": "ExistingRedisArn"
+                  },
+                  ""
+                ]
+              }
+            ]
+          },
+          "AssertDescription": "ExistingRedisArn is required."
+        },
+        {
+          "Assert": {
+            "Fn::Not": [
+              {
+                "Fn::Equals": [
+                  {
+                    "Ref": "ExistingRedisEndpoint"
+                  },
+                  ""
+                ]
+              }
+            ]
+          },
+          "AssertDescription": "ExistingRedisEndpoint is required."
+        },
+        {
+          "Assert": {
+            "Fn::Not": [
+              {
+                "Fn::Equals": [
+                  {
+                    "Ref": "ExistingRedisSecurityGroup"
+                  },
+                  ""
+                ]
+              }
+            ]
+          },
+          "AssertDescription": "ExistingRedisSecurityGroup is required."
+        },
+        {
+          "Assert": {
+            "Fn::Not": [
+              {
+                "Fn::Equals": [
+                  {
+                    "Ref": "ExistingRedisUserGroupId"
+                  },
+                  ""
+                ]
+              }
+            ]
+          },
+          "AssertDescription": "ExistingRedisUserGroupId is required."
+        }
+      ]
+    },
+    "NewRedisSubnets": {
+      "RuleCondition": {
+        "Fn::Equals": [
+          {
+            "Ref": "RedisMode"
+          },
+          "Create"
+        ]
+      },
+      "Assertions": [
+        {
+          "Assert": {
+            "Fn::Not": [
+              {
+                "Fn::Contains": [
+                  {
+                    "Ref": "PrivateSubnets"
+                  },
+                  ""
+                ]
+              }
+            ]
+          },
+          "AssertDescription": "Provide private subnets in two Availability Zones."
         }
       ]
     }

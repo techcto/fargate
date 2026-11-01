@@ -108,3 +108,19 @@ App installers create and upgrade tables in their own database. Allocation rollb
 The provider source is `functions/tenant-database/index.py`; its deployed inline copy in `apphub.yaml` must match. Local verification: `python3 tests/tenant_database_test.py`. No new pipeline test stage is required.
 
 These templates are prepared for native Cloud integration. They do not by themselves enable metered billing or complete CMS storage/MongoDB provisioning; keep the listing draft until the full launch is verified.
+
+## Optional shared data services and backup ownership
+
+`DocumentDbMode`, `FileSystemMode`, and `RedisMode` each accept None/Create/Existing, defaulting to None. New services use private subnets and dedicated security groups. Application stacks add only their own ingress rules. EFS requires encrypted transport and app-owned access points. DocumentDB and shared Valkey must use tenant-scoped credentials; endpoints alone do not grant access. The new Valkey cache starts with its default user disabled, so it remains inaccessible until the tenant ACL membership provisioner is complete.
+
+When `EnableBackups=true`, the selected Aurora, DocumentDB and EFS resources are explicitly enrolled in a daily AWS Backup plan and retained vault. `BackupRetentionDays` defaults to 30. Redis/Valkey uses native daily snapshots with seven-day retention; it is not represented as AWS Backup coverage. Network/compute resources are not data backups. Retained databases/cache also retain their required security groups and subnet/user groups so deleting a platform does not leave a retained database referencing resources CloudFormation is trying to remove.
+
+Whole-cluster recovery points belong to the hosting organization. A consuming organization's restore must not replace other tenants' data. Tenant restores require restoring to an isolated recovery target and importing only the selected tenant, followed by application-level verification.
+
+## Private and shared commercial offers
+
+Fargate App Hub is the private-stack product: the purchasing organization owns the AWS bill and pays the approved $5/vCPU-month management rate, prorated by runtime. SpaceMade Shared Fargate is a distinct hosted listing backed by a SpaceMade-owned stack. Hosting subscriptions allocate customer capacity without exposing the host's credentials or root data-service secrets.
+
+Shared hosting needs separate usage and allowance units for compute runtime, SQL, DocumentDB, cache, filesystem storage and backup retention/storage. Do not bill an entire shared DB or ALB again for every application. Additional service rates have not been approved. Database endpoints and EFS access points do not themselves provide tenant usage measurement or filesystem hard quotas; do not claim either before the relevant meter and enforcement are implemented and tested.
+
+Existing Redis/cache attachments keep the external owner's snapshot policy; their backup coverage must be verified before displaying them as protected. AWS Backup coverage reference: https://docs.aws.amazon.com/aws-backup/latest/devguide/backup-feature-availability.html

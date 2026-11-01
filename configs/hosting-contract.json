@@ -47,6 +47,28 @@
       "TenantDatabaseProviderArn",
       "PlatformStackName",
       "PlatformStackId"
+    ],
+    "documentdb": [
+      "DocumentDbArn",
+      "DocumentDbEndpoint",
+      "DocumentDbSecurityGroup"
+    ],
+    "filesystem": [
+      "EfsFileSystemId",
+      "EfsSecurityGroup"
+    ],
+    "cache": [
+      "RedisArn",
+      "RedisHost",
+      "RedisSecurityGroup",
+      "RedisUserGroupId"
+    ],
+    "backup": [
+      "BackupPlanId",
+      "BackupVaultName"
+    ],
+    "usage": [
+      "TaskEventsLogGroup"
     ]
   }
 }
