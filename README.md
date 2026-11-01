@@ -90,3 +90,7 @@ In Cloud, bind the Fargate App Hub Cluster item to the same SpaceMade Git provid
 SpaceMade's `fargate-app-hub` Cluster catalog item links to `techcto/fargate` through the same connected GitHub provider as `techcto/aws-kubernetes`. The GitHub repository owner is `techcto`; the selling Cloud organization is SpaceMade. Branch pushes exercise webhook delivery without creating catalog versions. Semantic release tags import draft versions through GitFlow after release artifacts are available.
 
 Private management terms: SpaceMade charges $5 per provisioned vCPU-month, prorated by running time. The cluster owner pays AWS infrastructure directly and sets its own application resale prices. These commercial terms are approved; paid activation remains gated on verified metering and lifecycle tests.
+
+### Release artifact access
+
+Cloud's existing catalog fetcher downloads templates over public HTTPS. The first release uploaded successfully, but anonymous reads returned HTTP 403. `devops/policy/public-release-read.statement.json` is a single proposed statement to merge into the bucket's existing CloudFormation-managed policy after reviewing ownership and current statements. It is not a replacement bucket policy or an executable deployment template. Preserve all unrelated statements and keep non-release prefixes private. S3 account/bucket public-access settings must permit this specific bucket-policy grant; the statement alone cannot override a public-access block. Do not change application buckets, data, credentials, or other prefixes to resolve release access.
