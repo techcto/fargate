@@ -32,3 +32,8 @@ test('product deletion never silently detaches owned AWS resources',()=>{
   assert.equal(template.Resources.Database.Properties.DeletionProtection,false);
   assert.equal(template.Resources.DocumentDb.Properties.DeletionProtection,false);
 });
+
+test("backup plan uses a valid stack-scoped AWS name",()=>{
+ const t=JSON.parse(readFileSync(new URL("../devops/cloudformation/apphub.yaml",import.meta.url),"utf8"));
+ assert.deepEqual(t.Resources.BackupPlan.Properties.BackupPlan.BackupPlanName,{"Fn::Sub":"${AWS::StackName}-shared-data"});
+});

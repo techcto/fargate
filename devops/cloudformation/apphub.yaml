@@ -855,7 +855,9 @@
       "Condition": "EnableDataBackups",
       "Properties": {
         "BackupPlan": {
-          "BackupPlanName": "Fargate App Hub shared data",
+          "BackupPlanName": {
+            "Fn::Sub": "${AWS::StackName}-shared-data"
+          },
           "BackupPlanRule": [
             {
               "RuleName": "daily-shared-data",
