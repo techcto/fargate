@@ -6,7 +6,7 @@ release_version="${1:?Supply the semantic release version without v}"
   echo 'Use a semantic version such as 0.1.0.' >&2
   exit 1
 }
-release_bucket="${FARGATE_RELEASE_BUCKET:-kubernetes-ui}"
+release_bucket="${FARGATE_RELEASE_BUCKET:-fargate-aws}"
 release_region="${AWS_REGION:-us-east-1}"
 release_prefix="s3://${release_bucket}/cloudformation/fargate/${release_version}"
 # Match Kubernetes publication: no catalog writes and no application deployment.

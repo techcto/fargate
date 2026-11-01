@@ -4,7 +4,7 @@ catalog-item:
   name: fargate-app-hub
 version:
   description: 'Fargate App Hub shared ECS infrastructure'
-  resource_url: 'https://kubernetes-ui.s3.amazonaws.com/cloudformation/fargate/${Git.Version}/apphub.yaml'
+  resource_url: 'https://fargate-aws.s3.amazonaws.com/cloudformation/fargate/${Git.Version}/apphub.yaml'
   resource_params: |
     engine: fargate
   version_status: draft
