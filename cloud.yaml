@@ -7,4 +7,7 @@ version:
   resource_url: 'https://fargate-aws.s3.amazonaws.com/cloudformation/fargate/${Git.Version}/apphub.yaml'
   resource_params: |
     engine: fargate
+    build:
+      - ParameterKey: DocumentDbAdminPassword
+        ParameterValue: '${Generator.MediumPassword.48}'
   version_status: draft

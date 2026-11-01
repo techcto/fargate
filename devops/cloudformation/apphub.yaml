@@ -164,6 +164,14 @@
       "Type": "String",
       "Default": "cron(0 5 * * ? *)",
       "Description": "AWS Backup schedule in UTC."
+    },
+    "DocumentDbAdminPassword": {
+      "Type": "String",
+      "NoEcho": true,
+      "Default": "",
+      "AllowedPattern": "^$|^[A-Za-z0-9]{32,64}$",
+      "ConstraintDescription": "Provide 32 to 64 alphanumeric characters when creating DocumentDB.",
+      "Description": "DocumentDB administrator password. Cloud generates this through the buildspec; direct CloudFormation users supply it."
     }
   },
   "Resources": {
@@ -572,11 +580,8 @@
       "DeletionPolicy": "Retain",
       "UpdateReplacePolicy": "Retain",
       "Properties": {
-        "GenerateSecretString": {
-          "SecretStringTemplate": "{\"username\":\"platformadmin\"}",
-          "GenerateStringKey": "password",
-          "PasswordLength": 48,
-          "ExcludePunctuation": true
+        "SecretString": {
+          "Fn::Sub": "{\"username\":\"platformadmin\",\"password\":\"${DocumentDbAdminPassword}\"}"
         }
       }
     },
@@ -713,46 +718,6 @@
       "DeletionPolicy": "Retain",
       "UpdateReplacePolicy": "Retain"
     },
-    "RedisDisabledDefaultUser": {
-      "Type": "AWS::ElastiCache::User",
-      "Condition": "CreateRedis",
-      "Properties": {
-        "UserId": {
-          "Fn::Join": [
-            "",
-            [
-              "hub-",
-              {
-                "Fn::Select": [
-                  2,
-                  {
-                    "Fn::Split": [
-                      "/",
-                      {
-                        "Ref": "AWS::StackId"
-                      }
-                    ]
-                  }
-                ]
-              }
-            ]
-          ]
-        },
-        "UserName": "default",
-        "Engine": "valkey",
-        "AccessString": "off -@all",
-        "AuthenticationMode": {
-          "Type": "password",
-          "Passwords": [
-            {
-              "Fn::Sub": "{{resolve:secretsmanager:${RedisDisabledSecret}:SecretString:password}}"
-            }
-          ]
-        }
-      },
-      "DeletionPolicy": "Retain",
-      "UpdateReplacePolicy": "Retain"
-    },
     "RedisUserGroup": {
       "Type": "AWS::ElastiCache::UserGroup",
       "Condition": "CreateRedis",
@@ -778,12 +743,7 @@
             ]
           ]
         },
-        "Engine": "valkey",
-        "UserIds": [
-          {
-            "Ref": "RedisDisabledDefaultUser"
-          }
-        ]
+        "Engine": "valkey"
       },
       "DeletionPolicy": "Retain",
       "UpdateReplacePolicy": "Retain"
@@ -997,20 +957,6 @@
               ]
             }
           ]
-        }
-      }
-    },
-    "RedisDisabledSecret": {
-      "Type": "AWS::SecretsManager::Secret",
-      "Condition": "CreateRedis",
-      "DeletionPolicy": "Retain",
-      "UpdateReplacePolicy": "Retain",
-      "Properties": {
-        "GenerateSecretString": {
-          "SecretStringTemplate": "{}",
-          "GenerateStringKey": "password",
-          "PasswordLength": 48,
-          "ExcludePunctuation": true
         }
       }
     },
@@ -2012,6 +1958,33 @@
             ]
           },
           "AssertDescription": "Provide private subnets in two Availability Zones."
+        }
+      ]
+    },
+    "DocumentDbPasswordRequired": {
+      "RuleCondition": {
+        "Fn::Equals": [
+          {
+            "Ref": "DocumentDbMode"
+          },
+          "Create"
+        ]
+      },
+      "Assertions": [
+        {
+          "Assert": {
+            "Fn::Not": [
+              {
+                "Fn::Equals": [
+                  {
+                    "Ref": "DocumentDbAdminPassword"
+                  },
+                  ""
+                ]
+              }
+            ]
+          },
+          "AssertDescription": "Provide DocumentDbAdminPassword when DocumentDbMode is Create."
         }
       ]
     }
