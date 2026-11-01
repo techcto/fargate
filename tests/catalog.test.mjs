@@ -7,7 +7,7 @@ test('shared platform owns no app databases or application services',()=>{const 
 test('Valkey uses native default-user disabling without a dummy password secret',()=>{
   const template=JSON.parse(readFileSync(new URL('../devops/cloudformation/apphub.yaml',import.meta.url),'utf8'));
   assert.equal(template.Resources.RedisUserGroup.Properties.Engine,'valkey');
-  assert.equal(template.Resources.RedisUserGroup.Properties.UserIds,undefined);
+  assert.deepEqual(template.Resources.RedisUserGroup.Properties.UserIds,[]);
   assert.equal(template.Resources.RedisDisabledSecret,undefined);
   assert.equal(template.Resources.RedisDisabledDefaultUser,undefined);
   assert.deepEqual(template.Resources.Redis.Properties.UserGroupId,{Ref:'RedisUserGroup'});

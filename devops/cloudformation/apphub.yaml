@@ -743,7 +743,8 @@
             ]
           ]
         },
-        "Engine": "valkey"
+        "Engine": "valkey",
+        "UserIds": []
       },
       "DeletionPolicy": "Delete",
       "UpdateReplacePolicy": "Delete"
