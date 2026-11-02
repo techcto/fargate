@@ -84,7 +84,13 @@ def handler(event, context):
         status = 'SUCCESS'
     except Exception as error:
         # Driver and AWS exceptions can contain credentials; never log or return them.
-        print('Tenant services allocation failed: ' + type(error).__name__)
+        details = getattr(error, 'response', {}).get('Error', {})
+        # Log only AWS identifiers, never service messages or request properties.
+        operation = getattr(error, 'operation_name', '')
+        code = details.get('Code', '')
+        safe = lambda value: re.sub(r'[^A-Za-z0-9_.-]', '', str(value))[:100]
+        print('Tenant services allocation failed: ' + type(error).__name__
+              + ' operation=' + safe(operation) + ' code=' + safe(code))
     payload = json.dumps({'Status': status, 'Reason': 'Tenant services allocation ' + status.lower(),
         'PhysicalResourceId': physical, 'StackId': event['StackId'], 'RequestId': event['RequestId'],
         'LogicalResourceId': event['LogicalResourceId'], 'NoEcho': True, 'Data': data}).encode()

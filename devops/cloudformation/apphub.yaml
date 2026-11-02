@@ -1207,24 +1207,29 @@
                   "Action": [
                     "elasticache:ModifyUserGroup"
                   ],
-                  "Resource": {
-                    "Fn::Sub": [
-                      "arn:${AWS::Partition}:elasticache:${AWS::Region}:${AWS::AccountId}:usergroup:${Group}",
-                      {
-                        "Group": {
-                          "Fn::If": [
-                            "CreateRedis",
-                            {
-                              "Ref": "RedisUserGroup"
-                            },
-                            {
-                              "Ref": "ExistingRedisUserGroupId"
-                            }
-                          ]
+                  "Resource": [
+                    {
+                      "Fn::Sub": [
+                        "arn:${AWS::Partition}:elasticache:${AWS::Region}:${AWS::AccountId}:usergroup:${Group}",
+                        {
+                          "Group": {
+                            "Fn::If": [
+                              "CreateRedis",
+                              {
+                                "Ref": "RedisUserGroup"
+                              },
+                              {
+                                "Ref": "ExistingRedisUserGroupId"
+                              }
+                            ]
+                          }
                         }
-                      }
-                    ]
-                  }
+                      ]
+                    },
+                    {
+                      "Fn::Sub": "arn:${AWS::Partition}:elasticache:${AWS::Region}:${AWS::AccountId}:user:u-*"
+                    }
+                  ]
                 },
                 {
                   "Effect": "Allow",
@@ -1338,7 +1343,7 @@
           "S3Bucket": {
             "Ref": "ArtifactBucket"
           },
-          "S3Key": "cloudformation/fargate/0.1.9/tenant-services.zip"
+          "S3Key": "cloudformation/fargate/0.1.10/tenant-services.zip"
         }
       }
     }

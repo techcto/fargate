@@ -37,3 +37,12 @@ test("backup plan uses a valid stack-scoped AWS name",()=>{
  const t=JSON.parse(readFileSync(new URL("../devops/cloudformation/apphub.yaml",import.meta.url),"utf8"));
  assert.deepEqual(t.Resources.BackupPlan.Properties.BackupPlan.BackupPlanName,{"Fn::Sub":"${AWS::StackName}-shared-data"});
 });
+
+test('tenant membership authorizes both the platform group and generated cache users',()=>{
+ const t=JSON.parse(readFileSync(new URL('../devops/cloudformation/apphub.yaml',import.meta.url),'utf8'));
+ const statements=t.Resources.TenantServicesRole.Properties.Policies[0].PolicyDocument.Statement;
+ const policy=statements.find(s=>s.Action.includes('elasticache:ModifyUserGroup'));
+ assert.ok(policy.Resource.some(r=>typeof r['Fn::Sub']==='object'&&r['Fn::Sub'][0].includes(':usergroup:${Group}')));
+ assert.ok(policy.Resource.some(r=>r['Fn::Sub']==='arn:${AWS::Partition}:elasticache:${AWS::Region}:${AWS::AccountId}:user:u-*'));
+ assert.ok(!policy.Resource.includes('*'));
+});
