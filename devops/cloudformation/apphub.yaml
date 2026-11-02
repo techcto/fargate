@@ -173,11 +173,6 @@
       "ConstraintDescription": "Provide 32 to 64 alphanumeric characters when creating DocumentDB.",
       "Description": "DocumentDB administrator password. Cloud generates this through the buildspec; direct CloudFormation users supply it."
     },
-    "ArtifactVersion": {
-      "Type": "String",
-      "Default": "0.1.8",
-      "AllowedPattern": "[0-9]+\\.[0-9]+\\.[0-9]+"
-    },
     "ArtifactBucket": {
       "Type": "String",
       "Default": "fargate-aws"
@@ -1343,9 +1338,7 @@
           "S3Bucket": {
             "Ref": "ArtifactBucket"
           },
-          "S3Key": {
-            "Fn::Sub": "cloudformation/fargate/${ArtifactVersion}/tenant-services.zip"
-          }
+          "S3Key": "cloudformation/fargate/0.1.9/tenant-services.zip"
         }
       }
     }
@@ -1667,6 +1660,10 @@
           "Arn"
         ]
       }
+    },
+    "TenantNamespaceV2": {
+      "Value": "2",
+      "Description": "Files, secrets and sessions use immutable application-stack identities."
     }
   },
   "Conditions": {

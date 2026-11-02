@@ -45,6 +45,14 @@ class TenantServicesTest(unittest.TestCase):
         self.assertTrue(self.connect.call_args.kwargs['tls'])
         self.assertNotIn('password',json.dumps(data))
 
+    def test_reusing_a_stack_name_does_not_reuse_any_tenant_identity(self):
+        reused = self.stack.rsplit('/', 1)[0] + '/33333333-3333-4333-8333-333333333333'
+        original = provider.identities(self.stack)
+        replacement = provider.identities(reused)
+        for before, after in zip(original, replacement):
+            self.assertNotEqual(before, after)
+        self.assertEqual(original[0] + ':', original[3])
+
     def test_foreign_secret_is_rejected_before_any_data_or_cache_mutation(self):
         self.secrets.describe_secret.return_value={'Tags':[]}
         with self.assertRaises(ValueError): self.run_provider()

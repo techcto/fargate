@@ -54,26 +54,13 @@ No release bucket URL or `cloud.yaml` import is fabricated here. The Cloud catal
 
 Canonical source: https://github.com/techcto/fargate. Cloud checks this repository out at `submodules/fargate`. The earlier local AppHub checkout is preserved; new development belongs here.
 
-## CMS attachment template
+## CMS Serverless
 
-`devops/cloudformation/cms-existing.yaml` is a candidate existing-infrastructure CMS application stack. AWS CloudFormation template validation passes; no install has been executed. It requires immutable CMS/UI image digests, private service subnets with egress to image registries and AWS APIs, an existing encrypted EFS filesystem, and pre-provisioned tenant-specific SQL credentials, Mongo endpoint, Redis endpoint, and SSO client.
-
-The existing Secrets Manager secret must contain `db_user`, `db_password`, `app_secret`, `admin_user`, `admin_password`, and `sso_client_secret`. Use the default Secrets Manager encryption key; a customer-managed KMS key requires a separately reviewed, scoped decrypt policy. Do not supply a server master login. The current CMS Mongo database is fixed to `solodev_views`, so Mongo must be isolated per tenant until CMS supports configurable database names. Redis likewise requires an isolated endpoint.
-
-The platform owner reserves an unused listener priority and installs the hostname's certificate on the shared HTTPS listener before launch. DNS and additional site/alias host rules are not created by this candidate template. Cloud must manage those lifecycle steps before offering self-service CMS hosting. Desired count is one; updates briefly stop the old task to prevent simultaneous initialization against the same tenant data. This is the lower-cost single-instance option, not high availability.
-
-The template creates application IAM roles scoped to its tenant secret, logs and EFS access point. It retains the access point and logs on deletion, and never owns the shared database servers, filesystem, cluster or load balancer. Review the full change set before running it. `cloud.yaml` describes the platform release only; it does not register or publish a CMS product automatically.
-
-Prepare an application change set against the existing platform:
-
-```sh
-bash open-fargate.sh plan-app CREATE cms-test cms-test-create devops/cloudformation/cms-existing.yaml path/to/private.parameters.json
-bash open-fargate.sh review-app cms-test cms-test-create
-# After reviewing IAM, data retention and availability impact:
-bash open-fargate.sh execute-app cms-test cms-test-create --reviewed
-```
-
-Use UPDATE for an existing application stack. The private parameters file is a standard CloudFormation parameter array. Omit Cluster, ListenerArn, LoadBalancerSecurityGroup and VpcId: the command resolves those from the backing stack and rejects overrides. Preparing a change set does not execute it. Do not pass raw credentials in parameters; use the tenant secret ARN. These commands operate only in the configured AWS profile/account and do not change Cloud catalog or billing records.
+CMS Serverless is a separate catalog product maintained in `solodev-dcx/cms`.
+Its versioned `solodev-cms-serverless.yaml` template owns each application's
+service, DNS, isolated databases, session namespace and EFS access point.
+AppHub publishes only the shared platform and allocator code. See
+[CMS-INTEGRATION.md](CMS-INTEGRATION.md) for the attachment contract.
 
 ## Kubernetes-compatible release flow
 

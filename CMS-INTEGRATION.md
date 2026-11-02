@@ -31,3 +31,10 @@ CMS Serverless is a separate catalog item, linked to the CMS repository. Its ver
 AppHub 0.1.8 adds CloudFormation-owned tenant DocumentDB allocation and Valkey group membership. Each application receives a database-specific `readWrite` document user and an authenticated cache user restricted to its stack-name key prefix. Administrator secrets are available only to the allocator. The CMS template owns its tenant secrets, cache user, EFS access point, ECS service and listener rule; the host owns the shared infrastructure. SQL and document data are retained on application rollback/deletion pending a reviewed data lifecycle.
 
 The platform update must be applied through its official versioned CloudFormation change set before launching CMS Serverless. Tenant allocation tests and AWS template validation pass locally; a live CMS Serverless install/update/delete and cross-tenant data test are still required.
+
+Tenant namespace contract v2 uses the application StackId hash for database names,
+file roots and Redis prefixes. Reusing a deleted stack name never reuses its data
+namespace. The platform advertises `TenantNamespaceV2`; CMS versions requiring it
+must not launch against an older allocator. Retained secrets use the stack UUID.
+Allocator artifact keys are baked into each published platform template so a
+normal upgrade updates its code while preserving customer-selected parameters.

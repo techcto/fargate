@@ -23,17 +23,13 @@ python3 - "$release_version" "$package_dir/apphub.yaml" <<'PY'
 import json, sys
 with open('devops/cloudformation/apphub.yaml') as source:
     template = json.load(source)
-template['Parameters']['ArtifactVersion']['Default'] = sys.argv[1]
+template['Resources']['TenantServicesProvider']['Properties']['Code']['S3Key'] = f'cloudformation/fargate/{sys.argv[1]}/tenant-services.zip'
 with open(sys.argv[2], 'w') as destination:
     json.dump(template, destination, indent=2)
 PY
 # Match Kubernetes publication: no catalog writes and no application deployment.
 # GitFlow imports the tagged cloud.yaml after artifact publication succeeds.
-for template in apphub.yaml cms-existing.yaml; do
-  template_source="devops/cloudformation/${template}"
-  if [ "$template" = apphub.yaml ]; then template_source="$package_dir/apphub.yaml"; fi
-  aws s3 cp "$template_source" "${release_prefix}/${template}" \
-    --content-type text/yaml --region "$release_region" --no-progress
-done
+aws s3 cp "$package_dir/apphub.yaml" "${release_prefix}/apphub.yaml" \
+  --content-type text/yaml --region "$release_region" --no-progress
 aws s3 cp configs/hosting-contract.json "${release_prefix}/hosting-contract.json" \
   --content-type application/json --region "$release_region" --no-progress

@@ -15,7 +15,8 @@ def identities(stack):
     if not match:
         raise ValueError('Invalid application stack')
     digest = hashlib.sha256(stack.encode()).hexdigest()
-    return 'd' + digest[:32], 'u' + digest[:24], 'u-' + match[2], match[1] + ':'
+    database = 'd' + digest[:32]
+    return database, 'u' + digest[:24], 'u-' + match[2], database + ':'
 
 
 def membership(cache, group, user, present):
