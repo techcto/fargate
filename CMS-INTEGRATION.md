@@ -23,3 +23,11 @@ The standalone wrapper creates ALB, ECS cluster, RDS, DocumentDB, EFS, optional 
 No running stack, database, CMS source, or IAM role was changed by this review. The Cloud Fargate adapter and per-tenant database provisioning are still required; the draft catalog listing must not be published until install/update/delete and cross-organization isolation are tested.
 
 AWS reference: https://docs.aws.amazon.com/eks/latest/userguide/fargate.html — EKS Fargate does not support EBS-backed pods or DaemonSets, so the existing CMS Helm chart cannot be assumed compatible without reviewing its storage and dependencies.
+
+## CMS Serverless release contract
+
+CMS Serverless is a separate catalog item, linked to the CMS repository. Its version has one resource URL, `solodev-cms-serverless.yaml`, published by the CMS tag pipeline. CMS for EKS retains its existing Helm wrapper and resource URL.
+
+AppHub 0.1.8 adds CloudFormation-owned tenant DocumentDB allocation and Valkey group membership. Each application receives a database-specific `readWrite` document user and an authenticated cache user restricted to its stack-name key prefix. Administrator secrets are available only to the allocator. The CMS template owns its tenant secrets, cache user, EFS access point, ECS service and listener rule; the host owns the shared infrastructure. SQL and document data are retained on application rollback/deletion pending a reviewed data lifecycle.
+
+The platform update must be applied through its official versioned CloudFormation change set before launching CMS Serverless. Tenant allocation tests and AWS template validation pass locally; a live CMS Serverless install/update/delete and cross-tenant data test are still required.

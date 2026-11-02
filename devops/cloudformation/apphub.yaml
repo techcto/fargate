@@ -172,6 +172,20 @@
       "AllowedPattern": "^$|^[A-Za-z0-9]{32,64}$",
       "ConstraintDescription": "Provide 32 to 64 alphanumeric characters when creating DocumentDB.",
       "Description": "DocumentDB administrator password. Cloud generates this through the buildspec; direct CloudFormation users supply it."
+    },
+    "ArtifactVersion": {
+      "Type": "String",
+      "Default": "0.1.8",
+      "AllowedPattern": "[0-9]+\\.[0-9]+\\.[0-9]+"
+    },
+    "ArtifactBucket": {
+      "Type": "String",
+      "Default": "fargate-aws"
+    },
+    "ExistingDocumentDbAdminSecretArn": {
+      "Type": "String",
+      "Default": "",
+      "Description": "Administrator secret ARN with username/password for an existing DocumentDB cluster; used only by the tenant allocator."
     }
   },
   "Resources": {
@@ -1084,6 +1098,256 @@
           }
         ]
       }
+    },
+    "TenantServicesSecurityGroup": {
+      "Condition": "HasTenantServices",
+      "DeletionPolicy": "Delete",
+      "UpdateReplacePolicy": "Delete",
+      "Type": "AWS::EC2::SecurityGroup",
+      "Properties": {
+        "VpcId": {
+          "Ref": "VpcId"
+        },
+        "GroupDescription": "DocumentDB tenant allocator"
+      }
+    },
+    "TenantServicesDocumentIngress": {
+      "Condition": "HasTenantServices",
+      "DeletionPolicy": "Delete",
+      "UpdateReplacePolicy": "Delete",
+      "Type": "AWS::EC2::SecurityGroupIngress",
+      "Properties": {
+        "GroupId": {
+          "Fn::If": [
+            "CreateDocumentDb",
+            {
+              "Ref": "DocumentDbSecurityGroup"
+            },
+            {
+              "Ref": "ExistingDocumentDbSecurityGroup"
+            }
+          ]
+        },
+        "IpProtocol": "tcp",
+        "FromPort": 27017,
+        "ToPort": 27017,
+        "SourceSecurityGroupId": {
+          "Ref": "TenantServicesSecurityGroup"
+        }
+      }
+    },
+    "TenantServicesLogs": {
+      "Condition": "HasTenantServices",
+      "DeletionPolicy": "Delete",
+      "UpdateReplacePolicy": "Delete",
+      "Type": "AWS::Logs::LogGroup",
+      "Properties": {
+        "LogGroupName": {
+          "Fn::Sub": "/aws/lambda/${AWS::StackName}-tenant-services"
+        },
+        "RetentionInDays": 90
+      }
+    },
+    "TenantServicesRole": {
+      "Condition": "HasTenantServices",
+      "DeletionPolicy": "Delete",
+      "UpdateReplacePolicy": "Delete",
+      "Type": "AWS::IAM::Role",
+      "Properties": {
+        "AssumeRolePolicyDocument": {
+          "Version": "2012-10-17",
+          "Statement": [
+            {
+              "Effect": "Allow",
+              "Principal": {
+                "Service": "lambda.amazonaws.com"
+              },
+              "Action": "sts:AssumeRole"
+            }
+          ]
+        },
+        "Policies": [
+          {
+            "PolicyName": "AllocateOnlyPlatformTenantServices",
+            "PolicyDocument": {
+              "Version": "2012-10-17",
+              "Statement": [
+                {
+                  "Effect": "Allow",
+                  "Action": [
+                    "secretsmanager:GetSecretValue"
+                  ],
+                  "Resource": {
+                    "Fn::If": [
+                      "CreateDocumentDb",
+                      {
+                        "Ref": "DocumentDbAdminSecret"
+                      },
+                      {
+                        "Ref": "ExistingDocumentDbAdminSecretArn"
+                      }
+                    ]
+                  }
+                },
+                {
+                  "Effect": "Allow",
+                  "Action": [
+                    "secretsmanager:GetSecretValue",
+                    "secretsmanager:DescribeSecret",
+                    "secretsmanager:PutSecretValue"
+                  ],
+                  "Resource": {
+                    "Fn::Sub": "arn:${AWS::Partition}:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:/spacemade/fargate/${AWS::StackName}/tenants/*"
+                  }
+                },
+                {
+                  "Effect": "Allow",
+                  "Action": [
+                    "elasticache:DescribeUserGroups"
+                  ],
+                  "Resource": "*"
+                },
+                {
+                  "Effect": "Allow",
+                  "Action": [
+                    "elasticache:ModifyUserGroup"
+                  ],
+                  "Resource": {
+                    "Fn::Sub": [
+                      "arn:${AWS::Partition}:elasticache:${AWS::Region}:${AWS::AccountId}:usergroup:${Group}",
+                      {
+                        "Group": {
+                          "Fn::If": [
+                            "CreateRedis",
+                            {
+                              "Ref": "RedisUserGroup"
+                            },
+                            {
+                              "Ref": "ExistingRedisUserGroupId"
+                            }
+                          ]
+                        }
+                      }
+                    ]
+                  }
+                },
+                {
+                  "Effect": "Allow",
+                  "Action": [
+                    "ec2:CreateNetworkInterface",
+                    "ec2:DescribeNetworkInterfaces",
+                    "ec2:DescribeSubnets",
+                    "ec2:DeleteNetworkInterface",
+                    "ec2:AssignPrivateIpAddresses",
+                    "ec2:UnassignPrivateIpAddresses"
+                  ],
+                  "Resource": "*"
+                },
+                {
+                  "Effect": "Allow",
+                  "Action": [
+                    "logs:CreateLogStream",
+                    "logs:PutLogEvents"
+                  ],
+                  "Resource": {
+                    "Fn::GetAtt": [
+                      "TenantServicesLogs",
+                      "Arn"
+                    ]
+                  }
+                }
+              ]
+            }
+          }
+        ]
+      }
+    },
+    "TenantServicesProvider": {
+      "Condition": "HasTenantServices",
+      "DeletionPolicy": "Delete",
+      "UpdateReplacePolicy": "Delete",
+      "Type": "AWS::Lambda::Function",
+      "DependsOn": [
+        "TenantServicesDocumentIngress"
+      ],
+      "Properties": {
+        "Runtime": "python3.13",
+        "Handler": "index.handler",
+        "Timeout": 300,
+        "MemorySize": 256,
+        "Role": {
+          "Fn::GetAtt": [
+            "TenantServicesRole",
+            "Arn"
+          ]
+        },
+        "LoggingConfig": {
+          "LogGroup": {
+            "Ref": "TenantServicesLogs"
+          }
+        },
+        "VpcConfig": {
+          "SubnetIds": {
+            "Ref": "PrivateSubnets"
+          },
+          "SecurityGroupIds": [
+            {
+              "Ref": "TenantServicesSecurityGroup"
+            }
+          ]
+        },
+        "Environment": {
+          "Variables": {
+            "PLATFORM_STACK_ID": {
+              "Ref": "AWS::StackId"
+            },
+            "ADMIN_SECRET_ARN": {
+              "Fn::If": [
+                "CreateDocumentDb",
+                {
+                  "Ref": "DocumentDbAdminSecret"
+                },
+                {
+                  "Ref": "ExistingDocumentDbAdminSecretArn"
+                }
+              ]
+            },
+            "DOCUMENT_ENDPOINT": {
+              "Fn::If": [
+                "CreateDocumentDb",
+                {
+                  "Fn::GetAtt": [
+                    "DocumentDb",
+                    "Endpoint"
+                  ]
+                },
+                {
+                  "Ref": "ExistingDocumentDbEndpoint"
+                }
+              ]
+            },
+            "CACHE_USER_GROUP": {
+              "Fn::If": [
+                "CreateRedis",
+                {
+                  "Ref": "RedisUserGroup"
+                },
+                {
+                  "Ref": "ExistingRedisUserGroupId"
+                }
+              ]
+            }
+          }
+        },
+        "Code": {
+          "S3Bucket": {
+            "Ref": "ArtifactBucket"
+          },
+          "S3Key": {
+            "Fn::Sub": "cloudformation/fargate/${ArtifactVersion}/tenant-services.zip"
+          }
+        }
+      }
     }
   },
   "Outputs": {
@@ -1394,6 +1658,15 @@
       "Value": {
         "Ref": "TaskEvents"
       }
+    },
+    "TenantServicesProviderArn": {
+      "Condition": "HasTenantServices",
+      "Value": {
+        "Fn::GetAtt": [
+          "TenantServicesProvider",
+          "Arn"
+        ]
+      }
     }
   },
   "Conditions": {
@@ -1527,6 +1800,16 @@
               "Condition": "HasFileSystem"
             }
           ]
+        }
+      ]
+    },
+    "HasTenantServices": {
+      "Fn::And": [
+        {
+          "Condition": "HasDocumentDb"
+        },
+        {
+          "Condition": "HasRedis"
         }
       ]
     }
@@ -1991,6 +2274,33 @@
             ]
           },
           "AssertDescription": "Provide DocumentDbAdminPassword when DocumentDbMode is Create."
+        }
+      ]
+    },
+    "ExistingDocumentDbTenantCredentials": {
+      "RuleCondition": {
+        "Fn::Equals": [
+          {
+            "Ref": "DocumentDbMode"
+          },
+          "Existing"
+        ]
+      },
+      "Assertions": [
+        {
+          "Assert": {
+            "Fn::Not": [
+              {
+                "Fn::Equals": [
+                  {
+                    "Ref": "ExistingDocumentDbAdminSecretArn"
+                  },
+                  ""
+                ]
+              }
+            ]
+          },
+          "AssertDescription": "Existing DocumentDB requires its administrator secret ARN for isolated tenant allocation."
         }
       ]
     }
