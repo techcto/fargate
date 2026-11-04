@@ -61,7 +61,9 @@
       "RedisArn",
       "RedisHost",
       "RedisSecurityGroup",
-      "RedisUserGroupId"
+      "RedisUserGroupId",
+      "TenantServicesProviderArn",
+      "TenantServicesCapabilities"
     ],
     "backup": [
       "BackupPlanId",
@@ -70,5 +72,10 @@
     "usage": [
       "TaskEventsLogGroup"
     ]
+  },
+  "tenantServices": {
+    "cacheOnly": "UseDocumentDatabase=false; require TenantServicesCapabilities=cache-only-v1 before calling the allocator.",
+    "legacy": "Omitting UseDocumentDatabase preserves document-database and cache allocation.",
+    "migration": "Changing an existing allocation between cache-only and document/cache requires an explicit migration."
   }
 }

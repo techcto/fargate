@@ -38,3 +38,19 @@ namespace. The platform advertises `TenantNamespaceV2`; CMS versions requiring i
 must not launch against an older allocator. Retained secrets use the stack UUID.
 Allocator artifact keys are baked into each published platform template so a
 normal upgrade updates its code while preserving customer-selected parameters.
+
+
+### Cache-only applications
+
+Applications that only need SQL and Redis/Valkey, such as CMSCritic, set
+`UseDocumentDatabase: false` on `Custom::AppHubTenantServices`. They receive
+only their cache identity and key prefix. No document administrator secret
+is read and no DocumentDB user is created. The allocator is available with
+Redis enabled even when DocumentDB is disabled. Existing workloads that omit
+the flag retain the original document/cache behavior.
+
+Publish and upgrade the host before enabling this flag in application releases.
+The host exposes `TenantServicesCapabilities: cache-only-v1` only with the
+updated allocator. App releases must require this output rather than assume an
+older host honors the flag. Changing the flag on an existing allocation is a
+migration, not an implicit deletion of document data.

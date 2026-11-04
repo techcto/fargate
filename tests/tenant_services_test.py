@@ -45,6 +45,32 @@ class TenantServicesTest(unittest.TestCase):
         self.assertTrue(self.connect.call_args.kwargs['tls'])
         self.assertNotIn('password',json.dumps(data))
 
+    def test_cache_only_does_not_require_documentdb_or_its_admin_secret(self):
+        self.event['ResourceProperties']['UseDocumentDatabase'] = False
+        self.environment.pop('DOCUMENT_ENDPOINT')
+        self.environment.pop('ADMIN_SECRET_ARN')
+        self.secrets.get_secret_value.return_value = {'SecretString': json.dumps({'redis_password': 'r' * 48})}
+        self.secrets.get_secret_value.side_effect = None
+        _, data = self.run_provider()
+        self.connect.assert_not_called()
+        self.secrets.get_secret_value.assert_called_once_with(SecretId='tenant')
+        self.assertEqual(data, {'RedisPrefix': self.prefix})
+        stored = json.loads(self.secrets.put_secret_value.call_args.kwargs['SecretString'])
+        self.assertNotIn('mongo_user', stored)
+        self.assertEqual(stored['redis_user'], self.user)
+
+    def test_cloudformation_boolean_string_is_supported(self):
+        self.assertFalse(provider.document_enabled({'UseDocumentDatabase': 'false'}))
+        self.assertTrue(provider.document_enabled({'UseDocumentDatabase': 'true'}))
+        with self.assertRaises(ValueError): provider.document_enabled({'UseDocumentDatabase': 'disabled'})
+
+    def test_document_allocation_cannot_be_silently_removed_on_update(self):
+        self.event.update(RequestType='Update', OldResourceProperties=dict(self.event['ResourceProperties']))
+        self.event['ResourceProperties']['UseDocumentDatabase'] = False
+        with self.assertRaises(ValueError): self.run_provider()
+        self.connect.assert_not_called()
+        self.cache.modify_user_group.assert_not_called()
+
     def test_reusing_a_stack_name_does_not_reuse_any_tenant_identity(self):
         reused = self.stack.rsplit('/', 1)[0] + '/33333333-3333-4333-8333-333333333333'
         original = provider.identities(self.stack)

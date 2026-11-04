@@ -35,9 +35,19 @@ def membership(cache, group, user, present):
     raise RuntimeError('Cache membership did not stabilize')
 
 
+def document_enabled(properties):
+    value = properties.get('UseDocumentDatabase', True)
+    if isinstance(value, bool):
+        return value
+    if value in ('true', 'false'):
+        return value == 'true'
+    raise ValueError('UseDocumentDatabase must be true or false')
+
+
 def provision(event, secrets, cache, connect, environment):
     database, username, cache_user, prefix = identities(event['StackId'])
     props = event['ResourceProperties']
+    use_document = document_enabled(props)
     if props['CacheUserId'] != cache_user:
         raise ValueError('Cache user does not belong to application stack')
     secret_arn = props['TenantSecretArn']
@@ -50,6 +60,8 @@ def provision(event, secrets, cache, connect, environment):
         raise ValueError('Allocation identity mismatch')
     if event['RequestType'] == 'Update':
         old = event['OldResourceProperties']
+        if document_enabled(old) != use_document:
+            raise ValueError('Changing document allocation requires a migration')
         if any(old.get(k) != props.get(k) for k in ['TenantSecretArn', 'CacheUserId']):
             raise ValueError('Changing tenant identity requires a migration')
     if event['RequestType'] == 'Delete':
@@ -59,20 +71,28 @@ def provision(event, secrets, cache, connect, environment):
     if event['RequestType'] not in ['Create', 'Update']:
         raise ValueError('Unsupported request')
     values = json.loads(secrets.get_secret_value(SecretId=secret_arn)['SecretString'])
-    password = values['mongo_password']
-    if not isinstance(password, str) or not re.fullmatch(r'[A-Za-z0-9]{32,64}', password):
-        raise ValueError('Invalid generated tenant password')
-    admin = json.loads(secrets.get_secret_value(SecretId=environment['ADMIN_SECRET_ARN'])['SecretString'])
-    with connect(environment['DOCUMENT_ENDPOINT'], 27017, username=admin['username'], password=admin['password'],
-                 authSource='admin', authMechanism='SCRAM-SHA-1', tls=True, tlsCAFile=os.path.join(os.path.dirname(__file__), 'global-bundle.pem'),
-                 retryWrites=False, serverSelectionTimeoutMS=10000, connectTimeoutMS=10000) as mongo:
-        roles = [{'role': 'readWrite', 'db': database}]
-        exists = mongo.admin.command('usersInfo', username)['users']
-        mongo.admin.command('updateUser' if exists else 'createUser', username, pwd=password, roles=roles)
+    if use_document:
+        if not environment.get('DOCUMENT_ENDPOINT') or not environment.get('ADMIN_SECRET_ARN'):
+            raise ValueError('DocumentDB is not enabled on this platform')
+        password = values['mongo_password']
+        if not isinstance(password, str) or not re.fullmatch(r'[A-Za-z0-9]{32,64}', password):
+            raise ValueError('Invalid generated tenant password')
+        admin = json.loads(secrets.get_secret_value(SecretId=environment['ADMIN_SECRET_ARN'])['SecretString'])
+        with connect(environment['DOCUMENT_ENDPOINT'], 27017, username=admin['username'], password=admin['password'],
+                     authSource='admin', authMechanism='SCRAM-SHA-1', tls=True, tlsCAFile=os.path.join(os.path.dirname(__file__), 'global-bundle.pem'),
+                     retryWrites=False, serverSelectionTimeoutMS=10000, connectTimeoutMS=10000) as mongo:
+            roles = [{'role': 'readWrite', 'db': database}]
+            exists = mongo.admin.command('usersInfo', username)['users']
+            mongo.admin.command('updateUser' if exists else 'createUser', username, pwd=password, roles=roles)
     membership(cache, environment['CACHE_USER_GROUP'], cache_user, True)
-    values.update(mongo_user=username, mongo_database=database, redis_user=cache_user, redis_prefix=prefix)
+    if use_document:
+        values.update(mongo_user=username, mongo_database=database)
+    values.update(redis_user=cache_user, redis_prefix=prefix)
     secrets.put_secret_value(SecretId=secret_arn, SecretString=json.dumps(values), ClientRequestToken=event['RequestId'])
-    return physical, {'MongoDatabase': database, 'MongoUser': username, 'RedisPrefix': prefix}
+    data = {'RedisPrefix': prefix}
+    if use_document:
+        data.update(MongoDatabase=database, MongoUser=username)
+    return physical, data
 
 
 def handler(event, context):

@@ -1103,11 +1103,11 @@
         "VpcId": {
           "Ref": "VpcId"
         },
-        "GroupDescription": "DocumentDB tenant allocator"
+        "GroupDescription": "Tenant database and cache allocator"
       }
     },
     "TenantServicesDocumentIngress": {
-      "Condition": "HasTenantServices",
+      "Condition": "HasDocumentAndCache",
       "DeletionPolicy": "Delete",
       "UpdateReplacePolicy": "Delete",
       "Type": "AWS::EC2::SecurityGroupIngress",
@@ -1168,21 +1168,29 @@
               "Version": "2012-10-17",
               "Statement": [
                 {
-                  "Effect": "Allow",
-                  "Action": [
-                    "secretsmanager:GetSecretValue"
-                  ],
-                  "Resource": {
-                    "Fn::If": [
-                      "CreateDocumentDb",
-                      {
-                        "Ref": "DocumentDbAdminSecret"
-                      },
-                      {
-                        "Ref": "ExistingDocumentDbAdminSecretArn"
+                  "Fn::If": [
+                    "HasDocumentDb",
+                    {
+                      "Effect": "Allow",
+                      "Action": [
+                        "secretsmanager:GetSecretValue"
+                      ],
+                      "Resource": {
+                        "Fn::If": [
+                          "CreateDocumentDb",
+                          {
+                            "Ref": "DocumentDbAdminSecret"
+                          },
+                          {
+                            "Ref": "ExistingDocumentDbAdminSecretArn"
+                          }
+                        ]
                       }
-                    ]
-                  }
+                    },
+                    {
+                      "Ref": "AWS::NoValue"
+                    }
+                  ]
                 },
                 {
                   "Effect": "Allow",
@@ -1267,9 +1275,6 @@
       "DeletionPolicy": "Delete",
       "UpdateReplacePolicy": "Delete",
       "Type": "AWS::Lambda::Function",
-      "DependsOn": [
-        "TenantServicesDocumentIngress"
-      ],
       "Properties": {
         "Runtime": "python3.13",
         "Handler": "index.handler",
@@ -1669,6 +1674,11 @@
     "TenantNamespaceV2": {
       "Value": "2",
       "Description": "Files, secrets and sessions use immutable application-stack identities."
+    },
+    "TenantServicesCapabilities": {
+      "Condition": "HasTenantServices",
+      "Description": "Tenant allocator contract supported by this release.",
+      "Value": "cache-only-v1"
     }
   },
   "Conditions": {
@@ -1806,6 +1816,9 @@
       ]
     },
     "HasTenantServices": {
+      "Condition": "HasRedis"
+    },
+    "HasDocumentAndCache": {
       "Fn::And": [
         {
           "Condition": "HasDocumentDb"
