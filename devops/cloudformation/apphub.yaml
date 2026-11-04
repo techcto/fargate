@@ -1103,7 +1103,7 @@
         "VpcId": {
           "Ref": "VpcId"
         },
-        "GroupDescription": "Tenant database and cache allocator"
+        "GroupDescription": "DocumentDB tenant allocator"
       }
     },
     "TenantServicesDocumentIngress": {
