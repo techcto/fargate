@@ -25,6 +25,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - name: Validate platform and recovery lifecycle
+        run: |
+          node tests/catalog.test.mjs
+          python3 -m unittest discover -s tests -p '*_test.py'
       - uses: aws-actions/configure-aws-credentials@v4
         with:
           aws-region: ${{ env.AWS_REGION }}

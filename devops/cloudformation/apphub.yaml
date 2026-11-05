@@ -1351,6 +1351,188 @@
           "S3Key": "cloudformation/fargate/0.1.10/tenant-services.zip"
         }
       }
+    },
+    "ApplicationBackupBucket": {
+      "Type": "AWS::S3::Bucket",
+      "DeletionPolicy": "Delete",
+      "UpdateReplacePolicy": "Delete",
+      "Properties": {
+        "PublicAccessBlockConfiguration": {
+          "BlockPublicAcls": true,
+          "BlockPublicPolicy": true,
+          "IgnorePublicAcls": true,
+          "RestrictPublicBuckets": true
+        },
+        "VersioningConfiguration": {
+          "Status": "Enabled"
+        },
+        "BucketEncryption": {
+          "ServerSideEncryptionConfiguration": [
+            {
+              "ServerSideEncryptionByDefault": {
+                "SSEAlgorithm": "AES256"
+              }
+            }
+          ]
+        },
+        "LifecycleConfiguration": {
+          "Rules": [
+            {
+              "Id": "abort-incomplete-exports",
+              "Status": "Enabled",
+              "AbortIncompleteMultipartUpload": {
+                "DaysAfterInitiation": 7
+              }
+            }
+          ]
+        }
+      }
+    },
+    "ApplicationBackupBucketPolicy": {
+      "Type": "AWS::S3::BucketPolicy",
+      "Properties": {
+        "Bucket": {
+          "Ref": "ApplicationBackupBucket"
+        },
+        "PolicyDocument": {
+          "Version": "2012-10-17",
+          "Statement": [
+            {
+              "Effect": "Deny",
+              "Principal": "*",
+              "Action": "s3:*",
+              "Resource": [
+                {
+                  "Fn::GetAtt": [
+                    "ApplicationBackupBucket",
+                    "Arn"
+                  ]
+                },
+                {
+                  "Fn::Sub": "${ApplicationBackupBucket.Arn}/*"
+                }
+              ],
+              "Condition": {
+                "Bool": {
+                  "aws:SecureTransport": "false"
+                }
+              }
+            }
+          ]
+        }
+      }
+    },
+    "ApplicationBackupCleanupRole": {
+      "Type": "AWS::IAM::Role",
+      "Properties": {
+        "AssumeRolePolicyDocument": {
+          "Version": "2012-10-17",
+          "Statement": [
+            {
+              "Effect": "Allow",
+              "Principal": {
+                "Service": "lambda.amazonaws.com"
+              },
+              "Action": "sts:AssumeRole"
+            }
+          ]
+        },
+        "ManagedPolicyArns": [
+          {
+            "Fn::Sub": "arn:${AWS::Partition}:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole"
+          }
+        ],
+        "Policies": [
+          {
+            "PolicyName": "DeleteOwnedApplicationBackupData",
+            "PolicyDocument": {
+              "Version": "2012-10-17",
+              "Statement": [
+                {
+                  "Effect": "Allow",
+                  "Action": [
+                    "s3:ListBucketVersions"
+                  ],
+                  "Resource": {
+                    "Fn::GetAtt": [
+                      "ApplicationBackupBucket",
+                      "Arn"
+                    ]
+                  },
+                  "Condition": {
+                    "StringLike": {
+                      "s3:prefix": "applications/*"
+                    }
+                  }
+                },
+                {
+                  "Effect": "Allow",
+                  "Action": [
+                    "s3:DeleteObjectVersion",
+                    "s3:AbortMultipartUpload"
+                  ],
+                  "Resource": {
+                    "Fn::Sub": "${ApplicationBackupBucket.Arn}/applications/*"
+                  }
+                },
+                {
+                  "Effect": "Allow",
+                  "Action": [
+                    "s3:ListBucketMultipartUploads"
+                  ],
+                  "Resource": {
+                    "Fn::GetAtt": [
+                      "ApplicationBackupBucket",
+                      "Arn"
+                    ]
+                  }
+                }
+              ]
+            }
+          }
+        ]
+      }
+    },
+    "ApplicationBackupCleanup": {
+      "Type": "AWS::Lambda::Function",
+      "Properties": {
+        "Runtime": "python3.13",
+        "Handler": "index.handler",
+        "Timeout": 900,
+        "Role": {
+          "Fn::GetAtt": [
+            "ApplicationBackupCleanupRole",
+            "Arn"
+          ]
+        },
+        "Environment": {
+          "Variables": {
+            "OWNER_STACK": {
+              "Ref": "AWS::StackId"
+            },
+            "BUCKET": {
+              "Ref": "ApplicationBackupBucket"
+            }
+          }
+        },
+        "Code": {
+          "ZipFile": "import json,os,urllib.request,boto3\n\ndef handler(event,context):\n    status=\"SUCCESS\"\n    reason=\"Application backup store lifecycle completed\"\n    try:\n        if event.get(\"StackId\")!=os.environ[\"OWNER_STACK\"]:\n            raise RuntimeError(\"Stack identity mismatch\")\n        if event.get(\"RequestType\")==\"Delete\":\n            s3=boto3.client(\"s3\")\n            bucket=os.environ[\"BUCKET\"]\n            while True:\n                if context.get_remaining_time_in_millis()<30000:\n                    raise RuntimeError(\"Cleanup needs another delete attempt\")\n                page=s3.list_object_versions(Bucket=bucket,Prefix=\"applications/\",MaxKeys=1000)\n                objects=[{\"Key\":x[\"Key\"],\"VersionId\":x[\"VersionId\"]} for x in page.get(\"Versions\",[])+page.get(\"DeleteMarkers\",[])]\n                if not objects:break\n                result=s3.delete_objects(Bucket=bucket,Delete={\"Objects\":objects,\"Quiet\":True})\n                if result.get(\"Errors\"):raise RuntimeError(\"Application backup data cleanup failed\")\n            while True:\n                if context.get_remaining_time_in_millis()<30000:\n                    raise RuntimeError(\"Cleanup needs another delete attempt\")\n                page=s3.list_multipart_uploads(Bucket=bucket,Prefix=\"applications/\",MaxUploads=1000)\n                uploads=page.get(\"Uploads\",[])\n                if not uploads:break\n                for upload in uploads:\n                    s3.abort_multipart_upload(Bucket=bucket,Key=upload[\"Key\"],UploadId=upload[\"UploadId\"])\n    except Exception:\n        status=\"FAILED\"\n        reason=\"Application backup store cleanup requires operator review; no infrastructure was detached\"\n    response={\"Status\":status,\"Reason\":reason,\"PhysicalResourceId\":event.get(\"PhysicalResourceId\",context.log_stream_name),\"StackId\":event[\"StackId\"],\"RequestId\":event[\"RequestId\"],\"LogicalResourceId\":event[\"LogicalResourceId\"],\"Data\":{}}\n    body=json.dumps(response).encode()\n    request=urllib.request.Request(event[\"ResponseURL\"],data=body,method=\"PUT\",headers={\"Content-Type\":\"\",\"Content-Length\":str(len(body))})\n    urllib.request.urlopen(request,timeout=20).close()\n"
+        }
+      }
+    },
+    "ApplicationBackupStoreLifecycle": {
+      "Type": "Custom::ApplicationBackupStoreLifecycle",
+      "Properties": {
+        "ServiceToken": {
+          "Fn::GetAtt": [
+            "ApplicationBackupCleanup",
+            "Arn"
+          ]
+        },
+        "Bucket": {
+          "Ref": "ApplicationBackupBucket"
+        }
+      }
     }
   },
   "Outputs": {
@@ -1679,6 +1861,11 @@
       "Condition": "HasTenantServices",
       "Description": "Tenant allocator contract supported by this release.",
       "Value": "cache-only-v1"
+    },
+    "ApplicationBackupBucketName": {
+      "Value": {
+        "Ref": "ApplicationBackupBucket"
+      }
     }
   },
   "Conditions": {

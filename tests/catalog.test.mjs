@@ -41,8 +41,20 @@ test("backup plan uses a valid stack-scoped AWS name",()=>{
 test('tenant membership authorizes both the platform group and generated cache users',()=>{
  const t=JSON.parse(readFileSync(new URL('../devops/cloudformation/apphub.yaml',import.meta.url),'utf8'));
  const statements=t.Resources.TenantServicesRole.Properties.Policies[0].PolicyDocument.Statement;
- const policy=statements.find(s=>s.Action.includes('elasticache:ModifyUserGroup'));
+ const policy=statements.find(s=>s.Action?.includes('elasticache:ModifyUserGroup'));
  assert.ok(policy.Resource.some(r=>typeof r['Fn::Sub']==='object'&&r['Fn::Sub'][0].includes(':usergroup:${Group}')));
  assert.ok(policy.Resource.some(r=>r['Fn::Sub']==='arn:${AWS::Partition}:elasticache:${AWS::Region}:${AWS::AccountId}:user:u-*'));
  assert.ok(!policy.Resource.includes('*'));
+});
+
+test('application recovery store is private, versioned and deleted through its owning stack',()=>{
+ const t=JSON.parse(readFileSync(new URL('../devops/cloudformation/apphub.yaml',import.meta.url),'utf8'));
+ const bucket=t.Resources.ApplicationBackupBucket;
+ assert.equal(bucket.DeletionPolicy,'Delete');
+ assert.equal(bucket.Properties.VersioningConfiguration.Status,'Enabled');
+ assert.ok(Object.values(bucket.Properties.PublicAccessBlockConfiguration).every(v=>v===true));
+ assert.deepEqual(t.Outputs.ApplicationBackupBucketName.Value,{Ref:'ApplicationBackupBucket'});
+ assert.equal(t.Resources.ApplicationBackupStoreLifecycle.Type,'Custom::ApplicationBackupStoreLifecycle');
+ assert.match(t.Resources.ApplicationBackupCleanup.Properties.Code.ZipFile,/Prefix="applications\/"/);
+ assert.match(t.Resources.ApplicationBackupCleanup.Properties.Code.ZipFile,/Stack identity mismatch/);
 });
