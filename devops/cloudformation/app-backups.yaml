@@ -6,7 +6,7 @@ Parameters:
     Description: Reviewed DynamoDB table and S3 bucket ARNs owned by application stacks; exclude cache and networking.
   RetentionDays:
     Type: Number
-    Default: 30
+    Default: 7
     MinValue: 1
     MaxValue: 3650
   ScheduleExpression:

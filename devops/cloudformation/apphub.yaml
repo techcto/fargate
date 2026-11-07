@@ -156,7 +156,7 @@
     },
     "BackupRetentionDays": {
       "Type": "Number",
-      "Default": 30,
+      "Default": 7,
       "MinValue": 1,
       "MaxValue": 3650
     },
