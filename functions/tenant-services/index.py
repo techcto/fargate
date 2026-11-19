@@ -19,20 +19,33 @@ def identities(stack):
     return database, 'u' + digest[:24], 'u-' + match[2], database + ':'
 
 
-def membership(cache, group, user, present):
-    deadline = time.monotonic() + 180
+class CacheMembershipTimeout(RuntimeError):
+    """Safe diagnostic: contains no credentials or driver response."""
+
+
+def membership(cache, group, user, present, deadline=None):
+    # A shared group's asynchronous changes serialize all tenant launches/deletes.
+    # Allow time for an earlier tenant's change as well as this tenant's change.
+    deadline = deadline if deadline is not None else time.monotonic() + 840
+    submitted = False
     while time.monotonic() < deadline:
         current = cache.describe_user_groups(UserGroupId=group)['UserGroups'][0]
-        if current['Status'] != 'active':
-            time.sleep(3)
-            continue
-        if (user in current.get('UserIds', [])) == present:
-            return
-        try:
-            cache.modify_user_group(UserGroupId=group, **{('UserIdsToAdd' if present else 'UserIdsToRemove'): [user]})
-        except cache.exceptions.InvalidUserGroupStateFault:
-            time.sleep(3)
-    raise RuntimeError('Cache membership did not stabilize')
+        if current['Status'] == 'active':
+            if (user in current.get('UserIds', [])) == present:
+                return
+            pending = current.get('PendingChanges') or {}
+            pending_key = 'UserIdsToAdd' if present else 'UserIdsToRemove'
+            if not submitted and user not in pending.get(pending_key, []):
+                try:
+                    cache.modify_user_group(UserGroupId=group, **{pending_key: [user]})
+                    submitted = True
+                except cache.exceptions.InvalidUserGroupStateFault:
+                    # Another tenant won the race after our read. Wait and retry.
+                    pass
+        remaining = deadline - time.monotonic()
+        if remaining > 0:
+            time.sleep(min(5, remaining))
+    raise CacheMembershipTimeout('Cache membership did not stabilize')
 
 
 def document_enabled(properties):
@@ -44,7 +57,7 @@ def document_enabled(properties):
     raise ValueError('UseDocumentDatabase must be true or false')
 
 
-def provision(event, secrets, cache, connect, environment):
+def provision(event, secrets, cache, connect, environment, deadline=None):
     database, username, cache_user, prefix = identities(event['StackId'])
     props = event['ResourceProperties']
     use_document = document_enabled(props)
@@ -65,7 +78,7 @@ def provision(event, secrets, cache, connect, environment):
         if any(old.get(k) != props.get(k) for k in ['TenantSecretArn', 'CacheUserId']):
             raise ValueError('Changing tenant identity requires a migration')
     if event['RequestType'] == 'Delete':
-        membership(cache, environment['CACHE_USER_GROUP'], cache_user, False)
+        membership(cache, environment['CACHE_USER_GROUP'], cache_user, False, deadline)
         # Retain document data and its user, matching SQL and retained tenant secrets.
         return physical, {'Retained': True}
     if event['RequestType'] not in ['Create', 'Update']:
@@ -84,7 +97,7 @@ def provision(event, secrets, cache, connect, environment):
             roles = [{'role': 'readWrite', 'db': database}]
             exists = mongo.admin.command('usersInfo', username)['users']
             mongo.admin.command('updateUser' if exists else 'createUser', username, pwd=password, roles=roles)
-    membership(cache, environment['CACHE_USER_GROUP'], cache_user, True)
+    membership(cache, environment['CACHE_USER_GROUP'], cache_user, True, deadline)
     if use_document:
         values.update(mongo_user=username, mongo_database=database)
     values.update(redis_user=cache_user, redis_prefix=prefix)
@@ -99,10 +112,15 @@ def handler(event, context):
     database = identities(event['StackId'])[0]
     physical = event.get('PhysicalResourceId', os.environ['PLATFORM_STACK_ID'] + '/' + database)
     status, data = 'FAILED', {}
+    reason = 'Tenant services allocation failed'
+    # Reserve time for the CloudFormation response, even when allocation stalls.
+    deadline = time.monotonic() + max(0, min(840, context.get_remaining_time_in_millis() / 1000 - 45))
     try:
-        physical, data = provision(event, boto3.client('secretsmanager'), boto3.client('elasticache'), MongoClient, os.environ)
+        physical, data = provision(event, boto3.client('secretsmanager'), boto3.client('elasticache'), MongoClient, os.environ, deadline)
         status = 'SUCCESS'
     except Exception as error:
+        if isinstance(error, CacheMembershipTimeout):
+            reason = 'Cache user-group membership did not stabilize before the allocation deadline; retry after pending cache changes finish'
         # Driver and AWS exceptions can contain credentials; never log or return them.
         details = getattr(error, 'response', {}).get('Error', {})
         # Log only AWS identifiers, never service messages or request properties.
@@ -111,7 +129,7 @@ def handler(event, context):
         safe = lambda value: re.sub(r'[^A-Za-z0-9_.-]', '', str(value))[:100]
         print('Tenant services allocation failed: ' + type(error).__name__
               + ' operation=' + safe(operation) + ' code=' + safe(code))
-    payload = json.dumps({'Status': status, 'Reason': 'Tenant services allocation ' + status.lower(),
+    payload = json.dumps({'Status': status, 'Reason': 'Tenant services allocation succeeded' if status == 'SUCCESS' else reason,
         'PhysicalResourceId': physical, 'StackId': event['StackId'], 'RequestId': event['RequestId'],
         'LogicalResourceId': event['LogicalResourceId'], 'NoEcho': True, 'Data': data}).encode()
     request = urllib.request.Request(event['ResponseURL'], data=payload, method='PUT', headers={'Content-Type': '', 'Content-Length': str(len(payload))})

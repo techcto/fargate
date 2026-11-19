@@ -1278,7 +1278,7 @@
       "Properties": {
         "Runtime": "python3.13",
         "Handler": "index.handler",
-        "Timeout": 300,
+        "Timeout": 900,
         "MemorySize": 256,
         "Role": {
           "Fn::GetAtt": [

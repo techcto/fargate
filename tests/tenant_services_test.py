@@ -4,7 +4,7 @@ from pathlib import Path
 import sys
 import types
 import unittest
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 
 sys.modules.setdefault('boto3', types.SimpleNamespace())
 sys.modules.setdefault('pymongo', types.SimpleNamespace(MongoClient=Mock()))
@@ -16,6 +16,9 @@ spec.loader.exec_module(provider)
 
 class TenantServicesTest(unittest.TestCase):
     def setUp(self):
+        sleep = patch.object(provider.time, "sleep")
+        sleep.start()
+        self.addCleanup(sleep.stop)
         self.stack = 'arn:aws:cloudformation:us-east-1:123456789012:stack/cms-test/11111111-1111-4111-8111-111111111111'
         self.database, self.username, self.user, self.prefix = provider.identities(self.stack)
         self.event = {'StackId':self.stack, 'RequestType':'Create', 'RequestId':'22222222-2222-4222-8222-222222222222',
@@ -33,6 +36,47 @@ class TenantServicesTest(unittest.TestCase):
 
     def run_provider(self):
         return provider.provision(self.event,self.secrets,self.cache,self.connect,self.environment)
+
+    def test_membership_waits_beyond_old_three_minute_limit_without_repeated_changes(self):
+        clock = [0]
+        def advance(seconds): clock[0] += seconds
+        def group(**kwargs):
+            if clock[0] < 200: return {'UserGroups': [{'Status': 'modifying', 'UserIds': []}]}
+            if clock[0] < 400: return {'UserGroups': [{'Status': 'active', 'UserIds': []}]}
+            return {'UserGroups': [{'Status': 'active', 'UserIds': [self.user]}]}
+        self.cache.describe_user_groups.side_effect = group
+        with patch.object(provider.time, 'monotonic', side_effect=lambda: clock[0]), patch.object(provider.time, 'sleep', side_effect=advance):
+            provider.membership(self.cache, 'group', self.user, True)
+        self.assertEqual(clock[0], 400)
+        self.cache.modify_user_group.assert_called_once_with(UserGroupId='group', UserIdsToAdd=[self.user])
+
+    def test_membership_deadline_is_bounded_and_diagnostic_is_safe(self):
+        self.cache.describe_user_groups.side_effect = None
+        self.cache.describe_user_groups.return_value = {'UserGroups': [{'Status': 'modifying', 'UserIds': []}]}
+        clock = [0]
+        with patch.object(provider.time, 'monotonic', side_effect=lambda: clock[0]), patch.object(provider.time, 'sleep', side_effect=lambda seconds: clock.__setitem__(0, clock[0] + seconds)):
+            with self.assertRaises(provider.CacheMembershipTimeout): provider.membership(self.cache, 'group', self.user, False, deadline=12)
+        self.assertEqual(clock[0], 12)
+        self.cache.modify_user_group.assert_not_called()
+
+    def test_other_tenant_winning_group_update_is_retried(self):
+        class Busy(Exception): pass
+        self.cache.exceptions.InvalidUserGroupStateFault = Busy
+        self.cache.modify_user_group.side_effect = [Busy(), None]
+        self.cache.describe_user_groups.side_effect = [
+            {'UserGroups': [{'Status': 'active', 'UserIds': []}]},
+            {'UserGroups': [{'Status': 'modifying', 'UserIds': ['other']}]},
+            {'UserGroups': [{'Status': 'active', 'UserIds': ['other']}]},
+            {'UserGroups': [{'Status': 'active', 'UserIds': ['other', self.user]}]},
+        ]
+        provider.membership(self.cache, 'group', self.user, True)
+        self.assertEqual(self.cache.modify_user_group.call_count, 2)
+        for call in self.cache.modify_user_group.call_args_list:
+            self.assertEqual(call.kwargs['UserIdsToAdd'], [self.user])
+
+    def test_allocator_runtime_covers_wait_and_cloudformation_response(self):
+        template = json.loads((root / 'devops/cloudformation/apphub.yaml').read_text())
+        self.assertEqual(template['Resources']['TenantServicesProvider']['Properties']['Timeout'], 900)
 
     def test_tenant_gets_only_its_document_database_and_cache_identity(self):
         physical,data = self.run_provider()
